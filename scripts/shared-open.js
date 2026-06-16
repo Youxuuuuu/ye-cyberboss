@@ -4,6 +4,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const readline = require("readline");
+const { resolveClaudeCodeIpcConfig } = require("../src/adapters/runtime/claudecode/ipc-paths");
 const {
   listenUrl,
   ensureSharedAppServer,
@@ -43,15 +44,8 @@ async function main() {
   // For Claude: connect to the bridge's IPC socket so we can observe and
   // interact with the same ClaudeCode process that handles WeChat messages.
   const stateDir = process.env.CYBERBOSS_STATE_DIR || path.join(os.homedir(), ".cyberboss");
-  const socketPath = path.join(stateDir, "claudecode-runtime.sock");
-
-  if (!fs.existsSync(socketPath)) {
-    console.error(`Claude IPC socket not found: ${socketPath}`);
-    console.error("Make sure the bridge is running with CYBERBOSS_RUNTIME=claudecode.");
-    process.exit(1);
-  }
-
-  const socket = net.createConnection(socketPath);
+  const ipcConfig = resolveClaudeCodeIpcConfig({ stateDir });
+  const socket = net.createConnection(ipcConfig.endpointPath);
   socket.setEncoding("utf8");
 
   let connected = false;
@@ -60,16 +54,20 @@ async function main() {
       connected = true;
       resolve();
     });
-    socket.once("error", (err) => reject(err));
+    socket.once("error", (err) => {
+      reject(new Error(
+        `Claude IPC endpoint not available (${ipcConfig.displayPath}): ${err.message}`
+      ));
+    });
     setTimeout(() => reject(new Error("connect timeout")), 3000);
   });
 
-  console.log(`Connected to ClaudeCode bridge IPC (${socketPath})`);
+  console.log(`Connected to ClaudeCode bridge IPC (${ipcConfig.displayPath})`);
   console.log(`Observing workspace: ${workspaceRoot}`);
   console.log("Type your message and press Enter to send. Ctrl+C to exit.\n");
 
   // Authenticate with the IPC server
-  const tokenFile = `${socketPath}.token`;
+  const tokenFile = ipcConfig.tokenFilePath;
   let authToken = "";
   try {
     authToken = fs.readFileSync(tokenFile, "utf8").trim();

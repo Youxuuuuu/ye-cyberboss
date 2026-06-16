@@ -7,6 +7,7 @@ const { ensureClaudeProjectMcpConfig } = require("./project-settings");
 const { SessionStore } = require("../codex/session-store");
 const { buildOpeningTurnText, buildInstructionRefreshText } = require("../shared-instructions");
 const { ClaudeCodeIpcServer } = require("./ipc-server");
+const { resolveClaudeCodeIpcConfig } = require("./ipc-paths");
 const CLAUDE_RESUME_SESSION_TIMEOUT_MS = 8000;
 
 function createClaudeCodeRuntimeAdapter(config) {
@@ -16,11 +17,8 @@ function createClaudeCodeRuntimeAdapter(config) {
   const pendingModelByWorkspaceRoot = new Map();
   const configuredModel = normalizeText(config.claudeModel);
   let globalListener = null;
-  const ipcSocketPath = path.join(
-    config.stateDir || path.join(os.homedir(), ".cyberboss"),
-    "claudecode-runtime.sock",
-  );
-  const ipcServer = new ClaudeCodeIpcServer({ socketPath: ipcSocketPath });
+  const ipcConfig = resolveClaudeCodeIpcConfig({ stateDir: config.stateDir });
+  const ipcServer = new ClaudeCodeIpcServer(ipcConfig);
 
   hydrateRuntimeModelsFromClaudeProjects();
 
@@ -159,7 +157,7 @@ function createClaudeCodeRuntimeAdapter(config) {
         kind: "runtime",
         command: config.claudeCommand || "claude",
         sessionsFile: config.sessionsFile,
-        ipcSocketPath,
+        ipcSocketPath: ipcConfig.displayPath,
         model: configuredModel,
       };
     },

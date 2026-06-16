@@ -1,5 +1,6 @@
 const fs = require("fs");
 const http = require("http");
+const net = require("net");
 const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
@@ -7,6 +8,7 @@ const {
   buildCodexMcpConfigArgs,
   resolveCodexProjectToolMcpServerConfig,
 } = require("../src/adapters/runtime/codex/mcp-config");
+const { resolveClaudeCodeIpcConfig } = require("../src/adapters/runtime/claudecode/ipc-paths");
 
 try {
   require("dotenv").config({ path: path.join(process.cwd(), ".env") });
@@ -108,15 +110,33 @@ function openLogFile(filePath) {
 function spawnDetachedCommand(command, args, { logFile, cwd = rootDir, env = {} } = {}) {
   const stdoutFd = openLogFile(logFile);
   const stderrFd = openLogFile(logFile);
-  const child = spawn(command, args, {
+  const spawnSpec = buildDetachedSpawnSpec(command, args);
+  const child = spawn(spawnSpec.command, spawnSpec.args, {
     cwd,
     env: { ...process.env, ...env },
     detached: true,
     stdio: ["ignore", stdoutFd, stderrFd],
-    shell: process.platform === "win32",
+    shell: false,
   });
   child.unref();
   return child.pid;
+}
+
+function buildDetachedSpawnSpec(command, args = []) {
+  const normalizedCommand = normalizeText(command);
+  const normalizedArgs = Array.isArray(args)
+    ? args.map((value) => String(value))
+    : [];
+  if (process.platform !== "win32") {
+    return {
+      command: normalizedCommand,
+      args: normalizedArgs,
+    };
+  }
+  return {
+    command: "cmd.exe",
+    args: ["/c", normalizedCommand, ...normalizedArgs],
+  };
 }
 
 async function ensureSharedAppServer() {
@@ -165,15 +185,69 @@ async function ensureSharedAppServer() {
   return { pid, status: "started" };
 }
 
-function ensureBridgeNotRunning() {
+async function ensureBridgeNotRunning(runtime = process.env.CYBERBOSS_RUNTIME || "codex") {
   const pidFromFile = readPidFile(bridgePidFile);
-  if (pidFromFile && isPidAlive(pidFromFile)) {
+  if (pidFromFile && await isSharedBridgeHealthy(pidFromFile, runtime)) {
     return pidFromFile;
   }
   if (pidFromFile) {
     fs.rmSync(bridgePidFile, { force: true });
   }
   return 0;
+}
+
+async function isSharedBridgeHealthy(pid, runtime = process.env.CYBERBOSS_RUNTIME || "codex") {
+  if (!pid || !isPidAlive(pid)) {
+    return false;
+  }
+  if (runtime !== "claudecode") {
+    return true;
+  }
+  return checkClaudeIpcReady();
+}
+
+async function checkClaudeIpcReady({ attempts = 3, delayMs = 200 } = {}) {
+  const ipcConfig = resolveClaudeCodeIpcConfig({ stateDir });
+  if (!fs.existsSync(ipcConfig.tokenFilePath)) {
+    return false;
+  }
+  for (let index = 0; index < attempts; index += 1) {
+    if (await canConnectToIpcEndpoint(ipcConfig.endpointPath)) {
+      return true;
+    }
+    if (index < attempts - 1) {
+      await sleep(delayMs);
+    }
+  }
+  return false;
+}
+
+function canConnectToIpcEndpoint(endpointPath, timeoutMs = 400) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let socket = null;
+    const finish = (value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      try {
+        socket?.destroy();
+      } catch {
+        // ignore
+      }
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    try {
+      socket = net.createConnection(endpointPath);
+      socket.once("connect", () => finish(true));
+      socket.once("error", () => finish(false));
+    } catch {
+      finish(false);
+    }
+  });
 }
 
 function resolveCurrentAccountId() {
@@ -281,5 +355,6 @@ module.exports = {
   removePidFileIfMatches,
   ensureSharedAppServer,
   ensureBridgeNotRunning,
+  isSharedBridgeHealthy,
   resolveBoundThread,
 };

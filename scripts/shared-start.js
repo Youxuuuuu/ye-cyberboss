@@ -20,7 +20,7 @@ async function main() {
     console.log(`shared app-server ${appServer.status}${appServerPidLabel} listen=${listenUrl}`);
   }
 
-  const existingBridgePid = ensureBridgeNotRunning();
+  const existingBridgePid = await ensureBridgeNotRunning(runtime);
   if (existingBridgePid) {
     console.log(`shared cyberboss already running pid=${existingBridgePid}`);
     return;

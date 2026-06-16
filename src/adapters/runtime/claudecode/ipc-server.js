@@ -5,10 +5,12 @@ const crypto = require("crypto");
 const { EventEmitter } = require("events");
 
 class ClaudeCodeIpcServer extends EventEmitter {
-  constructor({ socketPath }) {
+  constructor({ endpointPath, tokenFilePath, displayPath = "", usesFilesystemSocket = true }) {
     super();
-    this.socketPath = socketPath;
-    this.tokenFile = `${socketPath}.token`;
+    this.endpointPath = endpointPath;
+    this.tokenFile = tokenFilePath;
+    this.displayPath = displayPath || endpointPath;
+    this.usesFilesystemSocket = usesFilesystemSocket;
     this.authToken = "";
     this.server = null;
     this.clients = new Set();
@@ -60,8 +62,11 @@ class ClaudeCodeIpcServer extends EventEmitter {
       });
     });
 
-    this.server.listen(this.socketPath, () => {
-      fs.chmodSync(this.socketPath, 0o600);
+    this.server.listen(this.endpointPath, () => {
+      if (!this.usesFilesystemSocket) {
+        return;
+      }
+      fs.chmodSync(this.endpointPath, 0o600);
     });
   }
 
@@ -77,17 +82,23 @@ class ClaudeCodeIpcServer extends EventEmitter {
   }
 
   ensureDirectory() {
-    const dir = path.dirname(this.socketPath);
-    fs.mkdirSync(dir, { recursive: true });
+    if (this.usesFilesystemSocket) {
+      const socketDir = path.dirname(this.endpointPath);
+      fs.mkdirSync(socketDir, { recursive: true });
+    }
+    fs.mkdirSync(path.dirname(this.tokenFile), { recursive: true });
   }
 
   removeStaleSocket() {
+    if (!this.usesFilesystemSocket) {
+      return;
+    }
     try {
-      const stat = fs.lstatSync(this.socketPath);
+      const stat = fs.lstatSync(this.endpointPath);
       if (!stat.isSocket()) {
         return;
       }
-      fs.unlinkSync(this.socketPath);
+      fs.unlinkSync(this.endpointPath);
     } catch {
       // ignore
     }

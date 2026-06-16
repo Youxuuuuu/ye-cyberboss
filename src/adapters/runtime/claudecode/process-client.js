@@ -1,4 +1,8 @@
 const { spawn } = require("child_process");
+const os = require("os");
+
+const IS_WINDOWS = os.platform() === "win32";
+const WINDOWS_EXECUTABLE_SUFFIX_RE = /\.(cmd|exe|bat)$/i;
 
 class ClaudeCodeProcessClient {
   constructor({ command = "claude", cwd, env, model = "", permissionMode = "default", disableVerbose = false, extraArgs = [], mcpConfigPaths = [], ipcServer = null, workspaceRoot = "" }) {
@@ -63,11 +67,10 @@ class ClaudeCodeProcessClient {
     console.log(
       `[claudecode-runtime] launching command=${this.command} cwd=${this.cwd} mcp_config=${mcpLabel}`
     );
-    const child = spawn(this.command, args, {
+    const child = spawnClaudeCommand(this.command, args, {
       cwd: this.cwd,
       env: this.env,
       stdio: ["pipe", "pipe", "pipe"],
-      shell: false,
     });
     this.child = child;
     this.stdin = child.stdin;
@@ -426,12 +429,60 @@ function buildArgs({ model, permissionMode, disableVerbose, extraArgs, mcpConfig
   return args;
 }
 
+function spawnClaudeCommand(command, args, options) {
+  const commandCandidates = buildClaudeCommandCandidates(command);
+  let lastError = null;
+  for (const candidate of commandCandidates) {
+    try {
+      const spawnSpec = buildClaudeSpawnSpec(candidate, args);
+      return spawn(spawnSpec.command, spawnSpec.args, {
+        ...options,
+        shell: false,
+      });
+    } catch (error) {
+      lastError = error;
+      if (error?.code !== "ENOENT" && error?.code !== "EINVAL") {
+        throw error;
+      }
+    }
+  }
+  const attempted = commandCandidates.join(", ");
+  const detail = lastError?.message ? `: ${lastError.message}` : "";
+  throw new Error(`Unable to spawn Claude Code. Tried ${attempted}${detail}.`);
+}
+
+function buildClaudeCommandCandidates(command) {
+  const normalized = normalizeNonEmptyString(command) || "claude";
+  if (!IS_WINDOWS) {
+    return [normalized];
+  }
+  const candidates = [normalized];
+  if (!WINDOWS_EXECUTABLE_SUFFIX_RE.test(normalized)) {
+    candidates.push(`${normalized}.cmd`, `${normalized}.exe`, `${normalized}.bat`);
+  }
+  return [...new Set(candidates)];
+}
+
+function buildClaudeSpawnSpec(command, args) {
+  if (IS_WINDOWS) {
+    return {
+      command: "cmd.exe",
+      args: ["/c", command, ...args],
+    };
+  }
+  return { command, args };
+}
+
 function isValidSessionId(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value));
 }
 
 function normalizeSessionId(value) {
   return typeof value === "string" ? value.replace(/\s+/g, "").trim() : "";
+}
+
+function normalizeNonEmptyString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
 const SENSITIVE_KEYWORDS = /\b(?:key|token|secret|password|credential|api[_-]?key|auth[_-]?token|access[_-]?token|private[_-]?key)\b/i;

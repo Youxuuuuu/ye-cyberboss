@@ -5,6 +5,7 @@ const {
   bridgePidFile,
   readPidFile,
   isPidAlive,
+  isSharedBridgeHealthy,
 } = require("./shared-common");
 
 async function main() {
@@ -12,8 +13,12 @@ async function main() {
   const isCodex = runtime === "codex";
   console.log(`runtime=${runtime}`);
   console.log(`listen=${listenUrl}`);
-  printPidState("shared_app_server_pid", appServerPidFile);
-  printPidState("shared_cyberboss_pid", bridgePidFile);
+  if (!isCodex) {
+    console.log("shared_app_server_pid=skipped");
+  } else {
+    printPidState("shared_app_server_pid", appServerPidFile);
+  }
+  await printPidState("shared_cyberboss_pid", bridgePidFile, { runtime });
   if (!isCodex) {
     console.log(`readyz=skipped`);
   } else {
@@ -21,10 +26,14 @@ async function main() {
   }
 }
 
-function printPidState(label, filePath) {
+async function printPidState(label, filePath, { runtime = "" } = {}) {
   const pid = readPidFile(filePath);
   if (!pid) {
     console.log(`${label}=missing`);
+    return;
+  }
+  if (label === "shared_cyberboss_pid" && !(await isSharedBridgeHealthy(pid, runtime))) {
+    console.log(`${label}=stale`);
     return;
   }
   if (!isPidAlive(pid)) {
