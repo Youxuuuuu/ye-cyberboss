@@ -18,28 +18,43 @@ class SessionStore {
   }
 
   load() {
+    let raw = "";
+    let parsed = null;
     try {
-      const raw = fs.readFileSync(this.filePath, "utf8");
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object" && parsed.bindings) {
-        const nextState = normalizeSessionState({
-          ...createEmptyState(),
-          ...parsed,
-          bindings: parsed.bindings || {},
-          approvalCommandAllowlistByWorkspaceRoot: parsed.approvalCommandAllowlistByWorkspaceRoot || {},
-          approvalPromptStateByThreadId: parsed.approvalPromptStateByThreadId || {},
-          availableModelCatalog: parsed.availableModelCatalog || {
-            models: [],
-            updatedAt: "",
-          },
-        });
-        this.state = nextState;
-        if (JSON.stringify(parsed) !== JSON.stringify(nextState)) {
-          this.save();
-        }
-      }
+      raw = fs.readFileSync(this.filePath, "utf8");
+      parsed = JSON.parse(raw);
     } catch {
       this.state = createEmptyState();
+      return;
+    }
+
+    if (parsed && typeof parsed === "object" && parsed.bindings) {
+      const hydratedState = {
+        ...createEmptyState(),
+        ...parsed,
+        bindings: parsed.bindings || {},
+        approvalCommandAllowlistByWorkspaceRoot: parsed.approvalCommandAllowlistByWorkspaceRoot || {},
+        approvalPromptStateByThreadId: parsed.approvalPromptStateByThreadId || {},
+        availableModelCatalog: parsed.availableModelCatalog || {
+          models: [],
+          updatedAt: "",
+        },
+      };
+      const collisions = collectWorkspaceRootCollisions(hydratedState);
+      if (collisions.length) {
+        throw createWorkspaceRootCollisionError(this.filePath, collisions);
+      }
+
+      const nextState = normalizeSessionState(hydratedState);
+      if (JSON.stringify(parsed) !== JSON.stringify(nextState)) {
+        // 只在无冲突时回写归一化状态，避免静默折叠历史 workspaceRoot。
+        writeMigratedSessionState({
+          filePath: this.filePath,
+          rawContent: raw,
+          nextState,
+        });
+      }
+      this.state = nextState;
     }
   }
 
@@ -526,6 +541,162 @@ function normalizeApprovalPromptStateMap(map) {
 
 function choosePreferredScalarValue(currentValue, nextValue) {
   return normalizeValue(nextValue) ? nextValue : currentValue || "";
+}
+
+function collectWorkspaceRootCollisions(state) {
+  const collisions = [];
+  analyzeWorkspaceMapCollisions(collisions, state?.approvalCommandAllowlistByWorkspaceRoot, {
+    location: "approvalCommandAllowlistByWorkspaceRoot",
+    normalizeEntry: normalizeApprovalAllowlistEntryForComparison,
+  });
+
+  for (const [bindingKey, binding] of Object.entries(state?.bindings || {})) {
+    const normalizedBindingKey = normalizeValue(bindingKey) || "(unknown)";
+    const locationPrefix = `bindings.${normalizedBindingKey}`;
+    analyzeWorkspaceMapCollisions(collisions, binding?.threadIdByWorkspaceRoot, {
+      location: `${locationPrefix}.threadIdByWorkspaceRoot`,
+      normalizeEntry: normalizeThreadValue,
+    });
+    analyzeRuntimeWorkspaceMapCollisions(collisions, binding?.threadIdByWorkspaceRootByRuntime, {
+      location: `${locationPrefix}.threadIdByWorkspaceRootByRuntime`,
+      normalizeEntry: normalizeThreadValue,
+    });
+    analyzeWorkspaceMapCollisions(collisions, binding?.codexParamsByWorkspaceRoot, {
+      location: `${locationPrefix}.codexParamsByWorkspaceRoot`,
+      normalizeEntry: normalizeRuntimeParamsEntryForComparison,
+    });
+    analyzeRuntimeWorkspaceMapCollisions(collisions, binding?.runtimeParamsByWorkspaceRootByRuntime, {
+      location: `${locationPrefix}.runtimeParamsByWorkspaceRootByRuntime`,
+      normalizeEntry: normalizeRuntimeParamsEntryForComparison,
+    });
+  }
+
+  return collisions;
+}
+
+function analyzeRuntimeWorkspaceMapCollisions(collisions, runtimeMap, { location, normalizeEntry }) {
+  if (!runtimeMap || typeof runtimeMap !== "object") {
+    return;
+  }
+  for (const [runtimeId, scopedMap] of Object.entries(runtimeMap)) {
+    const normalizedRuntimeId = normalizeValue(runtimeId) || "(default)";
+    analyzeWorkspaceMapCollisions(collisions, scopedMap, {
+      location: `${location}.${normalizedRuntimeId}`,
+      normalizeEntry,
+    });
+  }
+}
+
+function analyzeWorkspaceMapCollisions(collisions, map, { location, normalizeEntry }) {
+  if (!map || typeof map !== "object") {
+    return;
+  }
+
+  const rawKeysByNormalizedWorkspaceRoot = new Map();
+  for (const workspaceRoot of Object.keys(map)) {
+    const normalizedWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot);
+    if (!normalizedWorkspaceRoot) {
+      continue;
+    }
+    const current = rawKeysByNormalizedWorkspaceRoot.get(normalizedWorkspaceRoot) || [];
+    current.push(workspaceRoot);
+    rawKeysByNormalizedWorkspaceRoot.set(normalizedWorkspaceRoot, current);
+  }
+
+  for (const [normalizedWorkspaceRoot, rawWorkspaceRoots] of rawKeysByNormalizedWorkspaceRoot.entries()) {
+    if (rawWorkspaceRoots.length < 2) {
+      continue;
+    }
+    const normalizedValues = rawWorkspaceRoots.map((workspaceRoot) => serializeCollisionValue(
+      typeof normalizeEntry === "function" ? normalizeEntry(map[workspaceRoot]) : map[workspaceRoot]
+    ));
+    const firstValue = normalizedValues[0];
+    const equivalent = normalizedValues.every((value) => value === firstValue);
+    if (!equivalent) {
+      collisions.push({
+        location,
+        normalizedWorkspaceRoot,
+        rawWorkspaceRoots,
+      });
+    }
+  }
+}
+
+function normalizeRuntimeParamsEntryForComparison(entry) {
+  return {
+    model: normalizeValue(entry?.model),
+    modelProvider: normalizeValue(entry?.modelProvider || entry?.model_provider),
+  };
+}
+
+function normalizeApprovalAllowlistEntryForComparison(entries) {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  return Array.from(new Set(
+    entries
+      .map((entry) => normalizeCommandTokens(entry))
+      .filter((entry) => entry.length)
+      .map((entry) => JSON.stringify(entry))
+  )).sort();
+}
+
+function serializeCollisionValue(value) {
+  if (value && typeof value === "object") {
+    return JSON.stringify(value);
+  }
+  return JSON.stringify(value ?? "");
+}
+
+function createWorkspaceRootCollisionError(filePath, collisions) {
+  const details = collisions.map((collision) => [
+    `location: ${collision.location}`,
+    `normalized workspaceRoot: ${collision.normalizedWorkspaceRoot}`,
+    `raw workspaceRoot keys: ${collision.rawWorkspaceRoots.join(", ")}`,
+  ].join("\n"));
+  const error = new Error([
+    `workspaceRoot collision detected while loading ${filePath}`,
+    ...details,
+    "Please manually clean up duplicate workspaceRoot entries in sessions.json before restarting.",
+  ].join("\n\n"));
+  error.code = "SESSION_WORKSPACE_ROOT_COLLISION";
+  error.collisions = collisions;
+  return error;
+}
+
+function writeMigratedSessionState({ filePath, rawContent, nextState }) {
+  const backupPath = buildSessionBackupPath(filePath);
+  try {
+    fs.writeFileSync(backupPath, rawContent, { encoding: "utf8", flag: "wx" });
+  } catch (error) {
+    throw createSessionBackupError(filePath, backupPath, error);
+  }
+  fs.writeFileSync(filePath, JSON.stringify(nextState, null, 2));
+}
+
+function buildSessionBackupPath(filePath) {
+  return `${filePath}.bak-${formatBackupTimestamp(new Date())}`;
+}
+
+function formatBackupTimestamp(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  const year = String(date.getFullYear()).padStart(4, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  const second = String(date.getSeconds()).padStart(2, "0");
+  return `${year}${month}${day}-${hour}${minute}${second}`;
+}
+
+function createSessionBackupError(filePath, backupPath, cause) {
+  const suffix = cause?.message ? `: ${cause.message}` : "";
+  const error = new Error(
+    `Failed to create backup before normalizing ${filePath}. Backup target: ${backupPath}${suffix}`
+  );
+  error.code = "SESSION_STATE_BACKUP_FAILED";
+  error.cause = cause;
+  return error;
 }
 
 function getLegacyThreadMap(binding) {
