@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { normalizeWorkspaceRoot } = require("./workspace-root");
 
 class SystemMessageQueueStore {
   constructor({ filePath }) {
@@ -82,7 +83,7 @@ function normalizeSystemMessage(message) {
   const id = normalizeText(message.id);
   const accountId = normalizeText(message.accountId);
   const senderId = normalizeText(message.senderId);
-  const workspaceRoot = normalizeText(message.workspaceRoot);
+  const workspaceRoot = normalizeWorkspaceRoot(message.workspaceRoot);
   const text = normalizeText(message.text);
   const createdAt = normalizeIsoTime(message.createdAt);
 

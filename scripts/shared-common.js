@@ -9,6 +9,7 @@ const {
   resolveCodexProjectToolMcpServerConfig,
 } = require("../src/adapters/runtime/codex/mcp-config");
 const { resolveClaudeCodeIpcConfig } = require("../src/adapters/runtime/claudecode/ipc-paths");
+const { normalizeWorkspaceRoot } = require("../src/core/workspace-root");
 
 try {
   require("dotenv").config({ path: path.join(process.cwd(), ".env") });
@@ -285,7 +286,7 @@ function resolveBoundThread(workspaceRoot) {
     .filter((binding) => !currentAccountId || normalizeText(binding?.accountId) === currentAccountId)
     .sort((left, right) => parseTimestamp(right?.updatedAt) - parseTimestamp(left?.updatedAt));
 
-  const normalizedWorkspaceRoot = normalizeText(workspaceRoot);
+  const normalizedWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot);
   const exact = bindings.find((binding) => getThreadId(binding, normalizedWorkspaceRoot, runtimeId));
   if (exact) {
     return {
@@ -295,11 +296,11 @@ function resolveBoundThread(workspaceRoot) {
   }
 
   const active = bindings.find((binding) => {
-    const activeWorkspaceRoot = normalizeText(binding?.activeWorkspaceRoot);
+    const activeWorkspaceRoot = normalizeWorkspaceRoot(binding?.activeWorkspaceRoot);
     return activeWorkspaceRoot && getThreadId(binding, activeWorkspaceRoot, runtimeId);
   });
   if (active) {
-    const activeWorkspaceRoot = normalizeText(active.activeWorkspaceRoot);
+    const activeWorkspaceRoot = normalizeWorkspaceRoot(active.activeWorkspaceRoot);
     return {
       threadId: getThreadId(active, activeWorkspaceRoot, runtimeId),
       workspaceRoot: activeWorkspaceRoot,
@@ -314,7 +315,7 @@ function getThreadId(binding, workspaceRoot, runtimeId = "") {
     return "";
   }
   const map = getThreadMapForRuntime(binding, runtimeId);
-  return normalizeText(map[workspaceRoot]);
+  return normalizeText(map[normalizeWorkspaceRoot(workspaceRoot)]);
 }
 
 function getThreadMapForRuntime(binding, runtimeId) {

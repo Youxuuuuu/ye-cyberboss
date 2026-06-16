@@ -6,6 +6,7 @@ const { resolveSelectedAccount } = require("../adapters/channel/weixin/account-s
 const { loadPersistedContextTokens } = require("../adapters/channel/weixin/context-token-store");
 const { resolvePreferredSenderId, resolvePreferredWorkspaceRoot } = require("../core/default-targets");
 const { SystemMessageQueueStore } = require("../core/system-message-queue-store");
+const { normalizeWorkspaceRoot } = require("../core/workspace-root");
 
 class SystemMessageService {
   constructor({ config, sessionStore }) {
@@ -19,6 +20,9 @@ class SystemMessageService {
     if (!normalizedText) {
       throw new Error("system send requires text");
     }
+    if (isFinalActionJson(normalizedText)) {
+      throw new Error("action JSON cannot be enqueued as a system trigger");
+    }
 
     const account = resolveSelectedAccount(this.config);
     const senderId = normalizeText(userId)
@@ -28,8 +32,8 @@ class SystemMessageService {
         accountId: account.accountId,
         sessionStore: this.sessionStore,
       });
-    const resolvedWorkspaceRoot = normalizeText(workspaceRoot)
-      || normalizeText(context?.workspaceRoot)
+    const resolvedWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot)
+      || normalizeWorkspaceRoot(context?.workspaceRoot)
       || resolvePreferredWorkspaceRoot({
         config: this.config,
         accountId: account.accountId,
@@ -72,6 +76,19 @@ class SystemMessageService {
 
 function normalizeText(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function isFinalActionJson(text) {
+  try {
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return false;
+    }
+    const action = normalizeText(parsed.action);
+    return action === "silent" || action === "send_message";
+  } catch {
+    return false;
+  }
 }
 
 module.exports = { SystemMessageService };

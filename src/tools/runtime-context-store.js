@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { normalizeWorkspaceRoot } = require("../core/workspace-root");
 
 class RuntimeContextStore {
   constructor({ filePath }) {
@@ -14,9 +15,11 @@ class RuntimeContextStore {
       const raw = fs.readFileSync(this.filePath, "utf8");
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === "object" && parsed.contextsByWorkspaceRoot) {
-        this.state = {
-          contextsByWorkspaceRoot: parsed.contextsByWorkspaceRoot,
-        };
+        const nextState = normalizeRuntimeContextState(parsed);
+        this.state = nextState;
+        if (JSON.stringify(parsed) !== JSON.stringify(nextState)) {
+          this.save();
+        }
       }
     } catch {
       this.state = { contextsByWorkspaceRoot: {} };
@@ -24,6 +27,7 @@ class RuntimeContextStore {
   }
 
   save() {
+    this.state = normalizeRuntimeContextState(this.state);
     fs.writeFileSync(this.filePath, JSON.stringify(this.state, null, 2));
   }
 
@@ -35,7 +39,7 @@ class RuntimeContextStore {
     accountId = "",
     senderId = "",
   } = {}) {
-    const normalizedWorkspaceRoot = normalizeText(workspaceRoot);
+    const normalizedWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot);
     if (!normalizedWorkspaceRoot) {
       return null;
     }
@@ -57,7 +61,7 @@ class RuntimeContextStore {
   }
 
   resolveActiveContext({ workspaceRoot = "", runtimeId = "" } = {}) {
-    const normalizedWorkspaceRoot = normalizeText(workspaceRoot);
+    const normalizedWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot);
     if (normalizedWorkspaceRoot) {
       const exact = this.state.contextsByWorkspaceRoot?.[normalizedWorkspaceRoot];
       if (exact) {
@@ -82,6 +86,50 @@ class RuntimeContextStore {
 
 function normalizeText(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeRuntimeContextState(state) {
+  const contextsByWorkspaceRoot = {};
+  const source = state?.contextsByWorkspaceRoot && typeof state.contextsByWorkspaceRoot === "object"
+    ? state.contextsByWorkspaceRoot
+    : {};
+
+  for (const [workspaceRoot, entry] of Object.entries(source)) {
+    const normalizedEntry = normalizeRuntimeContextEntry({
+      ...(entry && typeof entry === "object" ? entry : {}),
+      workspaceRoot: entry?.workspaceRoot || workspaceRoot,
+    });
+    if (!normalizedEntry) {
+      continue;
+    }
+    const current = contextsByWorkspaceRoot[normalizedEntry.workspaceRoot];
+    if (!current || parseUpdatedAt(normalizedEntry.updatedAt) >= parseUpdatedAt(current.updatedAt)) {
+      contextsByWorkspaceRoot[normalizedEntry.workspaceRoot] = normalizedEntry;
+    }
+  }
+
+  return { contextsByWorkspaceRoot };
+}
+
+function normalizeRuntimeContextEntry(entry) {
+  const workspaceRoot = normalizeWorkspaceRoot(entry?.workspaceRoot);
+  if (!workspaceRoot) {
+    return null;
+  }
+  return {
+    workspaceRoot,
+    runtimeId: normalizeText(entry?.runtimeId),
+    threadId: normalizeText(entry?.threadId),
+    bindingKey: normalizeText(entry?.bindingKey),
+    accountId: normalizeText(entry?.accountId),
+    senderId: normalizeText(entry?.senderId),
+    updatedAt: normalizeText(entry?.updatedAt) || new Date(0).toISOString(),
+  };
+}
+
+function parseUpdatedAt(value) {
+  const parsed = Date.parse(normalizeText(value));
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 module.exports = { RuntimeContextStore };

@@ -1,4 +1,5 @@
 const { loadPersistedContextTokens } = require("../adapters/channel/weixin/context-token-store");
+const { normalizeWorkspaceRoot } = require("./workspace-root");
 
 function resolvePreferredSenderId({
   config,
@@ -40,7 +41,7 @@ function resolvePreferredWorkspaceRoot({
   explicitWorkspace = "",
   sessionStore = null,
 }) {
-  const normalizedExplicitWorkspace = normalizeText(explicitWorkspace);
+  const normalizedExplicitWorkspace = normalizeWorkspaceRoot(explicitWorkspace);
   if (normalizedExplicitWorkspace) {
     return normalizedExplicitWorkspace;
   }
@@ -57,7 +58,7 @@ function resolvePreferredWorkspaceRoot({
       accountId: normalizedAccountId,
       senderId: normalizedSenderId,
     });
-    const activeWorkspaceRoot = normalizeText(store.getActiveWorkspaceRoot(bindingKey));
+    const activeWorkspaceRoot = normalizeWorkspaceRoot(store.getActiveWorkspaceRoot(bindingKey));
     if (activeWorkspaceRoot) {
       return activeWorkspaceRoot;
     }
@@ -74,7 +75,7 @@ function resolvePreferredWorkspaceRoot({
     return globalWorkspaceCandidates[0];
   }
 
-  return normalizeText(config?.workspaceRoot);
+  return normalizeWorkspaceRoot(config?.workspaceRoot);
 }
 
 function collectBindingSenderIds({ config, accountId, sessionStore }) {
@@ -134,7 +135,7 @@ function collectBindingWorkspaceRoots({ config, accountId, sessionStore }) {
 
 function collectWorkspaceRoots(binding) {
   const workspaceRoots = new Set();
-  const activeWorkspaceRoot = normalizeText(binding?.activeWorkspaceRoot);
+  const activeWorkspaceRoot = normalizeWorkspaceRoot(binding?.activeWorkspaceRoot);
   if (activeWorkspaceRoot) {
     workspaceRoots.add(activeWorkspaceRoot);
   }
@@ -146,14 +147,14 @@ function collectWorkspaceRoots(binding) {
       continue;
     }
     for (const workspaceRoot of Object.keys(scopedMap)) {
-      const normalizedWorkspaceRoot = normalizeText(workspaceRoot);
+      const normalizedWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot);
       if (normalizedWorkspaceRoot) {
         workspaceRoots.add(normalizedWorkspaceRoot);
       }
     }
   }
   for (const workspaceRoot of Object.keys(binding?.codexParamsByWorkspaceRoot || {})) {
-    const normalizedWorkspaceRoot = normalizeText(workspaceRoot);
+    const normalizedWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot);
     if (normalizedWorkspaceRoot) {
       workspaceRoots.add(normalizedWorkspaceRoot);
     }

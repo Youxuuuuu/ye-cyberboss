@@ -31,6 +31,7 @@ const { SystemMessageQueueStore } = require("./system-message-queue-store");
 const { SystemMessageDispatcher } = require("./system-message-dispatcher");
 const { TimelineScreenshotQueueStore } = require("./timeline-screenshot-queue-store");
 const { TurnGateStore } = require("./turn-gate-store");
+const { normalizeWorkspaceRoot } = require("./workspace-root");
 const { ReminderQueueStore } = require("../adapters/channel/weixin/reminder-queue-store");
 const {
   matchesCommandPrefix,
@@ -1467,7 +1468,7 @@ class CyberbossApp {
 
   resolveWorkspaceRoot(bindingKey) {
     const sessionStore = this.runtimeAdapter.getSessionStore();
-    return sessionStore.getActiveWorkspaceRoot(bindingKey) || this.config.workspaceRoot;
+    return sessionStore.getActiveWorkspaceRoot(bindingKey) || normalizeWorkspaceRoot(this.config.workspaceRoot);
   }
 
   async handleRuntimeEvent(event) {
@@ -2214,7 +2215,7 @@ function buildReminderSystemTrigger(reminder, config = {}) {
 
 function buildScopeKey(bindingKey, workspaceRoot) {
   const normalizedBindingKey = normalizeText(bindingKey);
-  const normalizedWorkspaceRoot = normalizeText(workspaceRoot);
+  const normalizedWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot);
   if (!normalizedBindingKey || !normalizedWorkspaceRoot) {
     return "";
   }

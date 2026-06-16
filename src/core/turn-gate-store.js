@@ -1,3 +1,5 @@
+const { normalizeWorkspaceRoot } = require("./workspace-root");
+
 class TurnGateStore {
   constructor() {
     this.scopeByThreadId = new Map();
@@ -50,7 +52,7 @@ class TurnGateStore {
 
 function buildTurnScopeKey(bindingKey, workspaceRoot) {
   const normalizedBindingKey = normalizeText(bindingKey);
-  const normalizedWorkspaceRoot = normalizeText(workspaceRoot);
+  const normalizedWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot);
   if (!normalizedBindingKey || !normalizedWorkspaceRoot) {
     return "";
   }

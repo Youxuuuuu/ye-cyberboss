@@ -1,3 +1,5 @@
+const { normalizeWorkspaceRoot } = require("./workspace-root");
+
 class SystemMessageDispatcher {
   constructor({ queueStore, config, accountId }) {
     this.queueStore = queueStore;
@@ -18,7 +20,7 @@ class SystemMessageDispatcher {
   }
 
   resolveWorkspaceRoot(message) {
-    return normalizeText(message?.workspaceRoot) || normalizeText(this.config.workspaceRoot);
+    return normalizeWorkspaceRoot(message?.workspaceRoot) || normalizeWorkspaceRoot(this.config.workspaceRoot);
   }
 
   buildPreparedMessage(message, contextToken = "") {

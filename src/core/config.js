@@ -1,5 +1,6 @@
 const os = require("os");
 const path = require("path");
+const { normalizeWorkspaceRoot } = require("./workspace-root");
 
 function readConfig() {
   const argv = process.argv.slice(2);
@@ -11,7 +12,7 @@ function readConfig() {
     argv,
     stateDir,
     workspaceId: readTextEnv("CYBERBOSS_WORKSPACE_ID") || "default",
-    workspaceRoot: readTextEnv("CYBERBOSS_WORKSPACE_ROOT") || process.cwd(),
+    workspaceRoot: normalizeWorkspaceRoot(readTextEnv("CYBERBOSS_WORKSPACE_ROOT") || process.cwd()),
     userName: readTextEnv("CYBERBOSS_USER_NAME") || "User",
     userGender: readTextEnv("CYBERBOSS_USER_GENDER") || "female",
     allowedUserIds: readListEnv("CYBERBOSS_ALLOWED_USER_IDS"),

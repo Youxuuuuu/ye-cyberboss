@@ -1,4 +1,5 @@
 const { WhereaboutsToolHost } = require("whereabouts-mcp");
+const { normalizeWorkspaceRoot } = require("../core/workspace-root");
 const {
   STICKER_DESC_GUIDANCE,
   STICKER_DESC_FIELD_DESCRIPTION,
@@ -43,7 +44,7 @@ class ProjectToolHost {
   }
 
   resolveContext(context = {}) {
-    const explicitWorkspaceRoot = normalizeText(context.workspaceRoot);
+    const explicitWorkspaceRoot = normalizeWorkspaceRoot(context.workspaceRoot);
     const explicitRuntimeId = normalizeText(context.runtimeId);
     const active = this.runtimeContextStore.resolveActiveContext({
       workspaceRoot: explicitWorkspaceRoot,
@@ -51,7 +52,7 @@ class ProjectToolHost {
     }) || {};
     return {
       runtimeId: explicitRuntimeId || normalizeText(active.runtimeId),
-      workspaceRoot: explicitWorkspaceRoot || normalizeText(active.workspaceRoot),
+      workspaceRoot: explicitWorkspaceRoot || normalizeWorkspaceRoot(active.workspaceRoot),
       threadId: normalizeText(context.threadId) || normalizeText(active.threadId),
       bindingKey: normalizeText(context.bindingKey) || normalizeText(active.bindingKey),
       accountId: normalizeText(context.accountId) || normalizeText(active.accountId),

@@ -1,8 +1,9 @@
 const fs = require("fs");
 const path = require("path");
+const { normalizeWorkspaceRoot } = require("../../../core/workspace-root");
 
 function ensureClaudeProjectMcpConfig({ workspaceRoot, cyberbossHome = "" } = {}) {
-  const normalizedWorkspaceRoot = normalizeText(workspaceRoot);
+  const normalizedWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot);
   if (!normalizedWorkspaceRoot) {
     throw new Error("workspaceRoot is required to configure Claude project tools.");
   }
@@ -32,7 +33,7 @@ function ensureClaudeProjectMcpConfig({ workspaceRoot, cyberbossHome = "" } = {}
 }
 
 function buildClaudeProjectMcpServerConfig({ workspaceRoot, cyberbossHome = "" } = {}) {
-  const normalizedWorkspaceRoot = normalizeText(workspaceRoot);
+  const normalizedWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot);
   const home = normalizeText(cyberbossHome) || process.env.CYBERBOSS_HOME || path.resolve(__dirname, "..", "..", "..", "..");
   const scriptPath = path.join(home, "bin", "cyberboss.js");
   if (!fs.existsSync(scriptPath)) {

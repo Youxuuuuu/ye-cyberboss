@@ -8,6 +8,7 @@ const { SessionStore } = require("../codex/session-store");
 const { buildOpeningTurnText, buildInstructionRefreshText } = require("../shared-instructions");
 const { ClaudeCodeIpcServer } = require("./ipc-server");
 const { resolveClaudeCodeIpcConfig } = require("./ipc-paths");
+const { normalizeWorkspaceRoot } = require("../../../core/workspace-root");
 const CLAUDE_RESUME_SESSION_TIMEOUT_MS = 8000;
 
 function createClaudeCodeRuntimeAdapter(config) {
@@ -24,13 +25,13 @@ function createClaudeCodeRuntimeAdapter(config) {
 
   ipcServer.on("clientMessage", (msg) => {
     if (msg?.type === "sendUserMessage" && msg?.workspaceRoot) {
-      const client = clientsByWorkspace.get(msg.workspaceRoot);
+      const client = clientsByWorkspace.get(normalizeWorkspaceRoot(msg.workspaceRoot));
       if (client?.alive) {
         client.sendUserMessage({ text: msg.text || "" }).catch(() => {});
       }
     }
     if (msg?.type === "respondApproval" && msg?.workspaceRoot) {
-      const client = clientsByWorkspace.get(msg.workspaceRoot);
+      const client = clientsByWorkspace.get(normalizeWorkspaceRoot(msg.workspaceRoot));
       if (client?.alive) {
         client.sendResponse(msg.requestId, { decision: msg.decision }).catch(() => {});
       }
@@ -42,24 +43,28 @@ function createClaudeCodeRuntimeAdapter(config) {
   }
 
   async function ensureClient(workspaceRoot, model = "") {
+    const normalizedWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot);
+    if (!normalizedWorkspaceRoot) {
+      throw new Error("workspaceRoot is required");
+    }
     const desiredModel = resolveModel(model);
-    const existing = clientsByWorkspace.get(workspaceRoot);
+    const existing = clientsByWorkspace.get(normalizedWorkspaceRoot);
     if (existing) {
       if (normalizeText(existing.model) === desiredModel) {
         return existing;
       }
-      await closeWorkspaceClient(workspaceRoot);
+      await closeWorkspaceClient(normalizedWorkspaceRoot);
     }
     const projectSettings = ensureClaudeProjectMcpConfig({
-      workspaceRoot,
+      workspaceRoot: normalizedWorkspaceRoot,
       cyberbossHome: process.env.CYBERBOSS_HOME || path.resolve(__dirname, "..", "..", "..", ".."),
     });
     console.log(
-      `[claudecode-runtime] workspace=${workspaceRoot} mcp_config=${projectSettings.configPath} server=${projectSettings.serverName}`
+      `[claudecode-runtime] workspace=${normalizedWorkspaceRoot} mcp_config=${projectSettings.configPath} server=${projectSettings.serverName}`
     );
     const client = new ClaudeCodeProcessClient({
       command: config.claudeCommand || "claude",
-      cwd: workspaceRoot,
+      cwd: normalizedWorkspaceRoot,
       env: filterClaudeCodeEnv(process.env),
       model: desiredModel,
       permissionMode: config.claudePermissionMode || "default",
@@ -67,42 +72,42 @@ function createClaudeCodeRuntimeAdapter(config) {
       extraArgs: config.claudeExtraArgs || [],
       mcpConfigPaths: [projectSettings.configPath],
       ipcServer,
-      workspaceRoot,
+      workspaceRoot: normalizedWorkspaceRoot,
     });
     client.onMessage((event, raw) => {
-      rememberObservedModelForWorkspace(workspaceRoot, extractClaudeMessageModel(raw));
+      rememberObservedModelForWorkspace(normalizedWorkspaceRoot, extractClaudeMessageModel(raw));
       if (event.type === "session.id") {
         for (const binding of sessionStore.listBindings()) {
-          if (binding.activeWorkspaceRoot === workspaceRoot) {
-            sessionStore.setThreadIdForWorkspace(binding.bindingKey, workspaceRoot, event.sessionId);
+          if (normalizeWorkspaceRoot(binding.activeWorkspaceRoot) === normalizedWorkspaceRoot) {
+            sessionStore.setThreadIdForWorkspace(binding.bindingKey, normalizedWorkspaceRoot, event.sessionId);
           }
         }
         return;
       }
       const mapped = mapClaudeCodeMessageToRuntimeEvent(event, raw);
       if (mapped?.payload && !mapped.payload.workspaceRoot) {
-        mapped.payload.workspaceRoot = workspaceRoot;
+        mapped.payload.workspaceRoot = normalizedWorkspaceRoot;
       }
       if (mapped?.type === "runtime.approval.requested") {
         if (pendingApprovals.size >= 100) {
           const firstKey = pendingApprovals.keys().next().value;
           pendingApprovals.delete(firstKey);
         }
-        pendingApprovals.set(mapped.payload.requestId, workspaceRoot);
+        pendingApprovals.set(mapped.payload.requestId, normalizedWorkspaceRoot);
       }
       if (mapped?.type === "runtime.turn.failed") {
-        clientsByWorkspace.delete(workspaceRoot);
+        clientsByWorkspace.delete(normalizedWorkspaceRoot);
       }
       if (mapped && globalListener) {
         globalListener(mapped, raw);
       }
     });
-    clientsByWorkspace.set(workspaceRoot, client);
+    clientsByWorkspace.set(normalizedWorkspaceRoot, client);
     return client;
   }
 
   async function attachClientToThread(workspaceRoot, threadId = "", model = "") {
-    const normalizedWorkspaceRoot = typeof workspaceRoot === "string" ? workspaceRoot.trim() : "";
+    const normalizedWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot);
     const normalizedThreadId = normalizeThreadId(threadId);
     const desiredModel = resolveModel(model);
     if (!normalizedWorkspaceRoot) {
@@ -134,7 +139,7 @@ function createClaudeCodeRuntimeAdapter(config) {
     return { client, threadId: normalizedThreadId || normalizeThreadId(client.sessionId) };
   }
   async function closeWorkspaceClient(workspaceRoot) {
-    const normalizedWorkspaceRoot = typeof workspaceRoot === "string" ? workspaceRoot.trim() : "";
+    const normalizedWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot);
     if (!normalizedWorkspaceRoot) {
       return;
     }
@@ -307,7 +312,7 @@ function createClaudeCodeRuntimeAdapter(config) {
         returnedThreadId,
         metadata,
       );
-      rememberModelForBinding(bindingKey, workspaceRoot, pendingModelByWorkspaceRoot.get(normalizeText(workspaceRoot)));
+      rememberModelForBinding(bindingKey, workspaceRoot, pendingModelByWorkspaceRoot.get(normalizeWorkspaceRoot(workspaceRoot)));
       return {
         threadId: returnedThreadId,
         turnId: client.pendingTurnId,
@@ -318,7 +323,7 @@ function createClaudeCodeRuntimeAdapter(config) {
   function hydrateRuntimeModelsFromClaudeProjects() {
     for (const binding of sessionStore.listBindings()) {
       const workspaceRoots = new Set([
-        normalizeText(binding.activeWorkspaceRoot),
+        normalizeWorkspaceRoot(binding.activeWorkspaceRoot),
         ...sessionStore.listWorkspaceRoots(binding.bindingKey),
       ].filter(Boolean));
       for (const workspaceRoot of workspaceRoots) {
@@ -334,14 +339,14 @@ function createClaudeCodeRuntimeAdapter(config) {
   }
 
   function rememberObservedModelForWorkspace(workspaceRoot, model) {
-    const normalizedWorkspaceRoot = normalizeText(workspaceRoot);
+    const normalizedWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot);
     const normalizedModel = normalizeClaudeRuntimeModel(model);
     if (!normalizedWorkspaceRoot || !normalizedModel) {
       return;
     }
     let remembered = false;
     for (const binding of sessionStore.listBindings()) {
-      if (normalizeText(binding.activeWorkspaceRoot) === normalizedWorkspaceRoot) {
+      if (normalizeWorkspaceRoot(binding.activeWorkspaceRoot) === normalizedWorkspaceRoot) {
         rememberModelForBinding(binding.bindingKey, normalizedWorkspaceRoot, normalizedModel);
         remembered = true;
       }
@@ -353,14 +358,15 @@ function createClaudeCodeRuntimeAdapter(config) {
 
   function rememberModelForBinding(bindingKey, workspaceRoot, model) {
     const normalizedModel = normalizeClaudeRuntimeModel(model);
-    if (!bindingKey || !normalizeText(workspaceRoot) || !normalizedModel) {
+    const normalizedWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot);
+    if (!bindingKey || !normalizedWorkspaceRoot || !normalizedModel) {
       return;
     }
-    const current = sessionStore.getRuntimeParamsForWorkspace(bindingKey, workspaceRoot);
+    const current = sessionStore.getRuntimeParamsForWorkspace(bindingKey, normalizedWorkspaceRoot);
     if (normalizeText(current.model) === normalizedModel) {
       return;
     }
-    sessionStore.setRuntimeParamsForWorkspace(bindingKey, workspaceRoot, {
+    sessionStore.setRuntimeParamsForWorkspace(bindingKey, normalizedWorkspaceRoot, {
       model: normalizedModel,
       modelProvider: "",
     });
@@ -430,7 +436,7 @@ function readLatestClaudeProjectModel({ claudeConfigDir = "", workspaceRoot = ""
 }
 
 function resolveClaudeProjectTranscriptPath({ claudeConfigDir = "", workspaceRoot = "", threadId = "" } = {}) {
-  const normalizedWorkspaceRoot = normalizeText(workspaceRoot);
+  const normalizedWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot);
   const normalizedThreadId = normalizeThreadId(threadId);
   if (!normalizedWorkspaceRoot || !normalizedThreadId) {
     return "";
@@ -440,7 +446,7 @@ function resolveClaudeProjectTranscriptPath({ claudeConfigDir = "", workspaceRoo
 }
 
 function encodeClaudeProjectPath(workspaceRoot) {
-  return normalizeText(workspaceRoot).replace(/[\\/:\s]+/g, "-");
+  return normalizeWorkspaceRoot(workspaceRoot).replace(/[\\/:\s]+/g, "-");
 }
 
 function hasClaudeImageFileRead(model) {
