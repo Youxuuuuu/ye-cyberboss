@@ -1370,13 +1370,20 @@ class CyberbossApp {
     if (command.name === "always" && isApprovalAcceptResponse(approvalResponse)) {
       this.runtimeAdapter.getSessionStore().rememberApprovalPrefixForWorkspace(workspaceRoot, approval.commandTokens);
     }
-    this.threadStateStore.resolveApproval(threadId, "running");
+    const nextThreadState = this.threadStateStore.resolveApproval(threadId, "running", approval.requestId);
     const text = buildApprovalResponseText(approval, command.name, approvalResponse);
     await this.channelAdapter.sendText({
       userId: normalized.senderId,
       text,
       contextToken: normalized.contextToken,
     });
+    if (typeof this.promptNextPendingApproval === "function") {
+      await this.promptNextPendingApproval({
+        threadId,
+        bindingKey,
+        pendingApproval: nextThreadState?.pendingApproval || null,
+      });
+    }
   }
 
   async handleModelCommand(normalized, command) {
@@ -1545,6 +1552,18 @@ class CyberbossApp {
       || matchesBuiltInCommandPrefix(event.payload.commandTokens)
       || matchesCommandPrefix(event.payload.commandTokens, allowlist);
     if (!shouldAutoApprove) {
+      const threadState = typeof this.threadStateStore?.getThreadState === "function"
+        ? this.threadStateStore.getThreadState(event.payload.threadId)
+        : null;
+      if (
+        threadState?.pendingApproval?.requestId != null
+        && String(threadState.pendingApproval.requestId).trim() !== String(event.payload.requestId ?? "").trim()
+      ) {
+        console.log(
+          `[cyberboss] approval queued thread=${event.payload.threadId} requestId=${event.payload.requestId}`
+        );
+        return;
+      }
       const promptState = sessionStore.getApprovalPromptState(event.payload.threadId);
       const promptSignature = buildApprovalPromptSignature(event.payload);
       if (promptState?.signature && promptState.signature === promptSignature) {
@@ -1574,7 +1593,18 @@ class CyberbossApp {
       return;
     }
     await this.runtimeAdapter.respondApproval(approvalResponse).catch(() => {});
-    this.threadStateStore.resolveApproval(event.payload.threadId, "running");
+    const nextThreadState = this.threadStateStore.resolveApproval(
+      event.payload.threadId,
+      "running",
+      event.payload.requestId,
+    );
+    if (typeof this.promptNextPendingApproval === "function") {
+      await this.promptNextPendingApproval({
+        threadId: event.payload.threadId,
+        bindingKey: linked.bindingKey,
+        pendingApproval: nextThreadState?.pendingApproval || null,
+      });
+    }
   }
 
   async stopTypingForThread(threadId) {
@@ -1630,6 +1660,22 @@ class CyberbossApp {
     console.log(
       `[cyberboss] approval prompt delivered binding=${bindingKey} user=${target.userId} requestId=${approval?.requestId || ""}`
     );
+  }
+
+  async promptNextPendingApproval({ threadId = "", bindingKey = "", pendingApproval = null } = {}) {
+    if (!threadId || !bindingKey || pendingApproval?.requestId == null) {
+      return;
+    }
+    const sessionStore = this.runtimeAdapter.getSessionStore();
+    const promptSignature = buildApprovalPromptSignature(pendingApproval);
+    sessionStore.rememberApprovalPrompt(threadId, pendingApproval.requestId, promptSignature);
+    await this.sendApprovalPrompt({
+      bindingKey,
+      approval: pendingApproval,
+    }).catch((error) => {
+      sessionStore.clearApprovalPrompt(threadId);
+      throw error;
+    });
   }
 
   async restoreBoundThreadSubscriptions() {
