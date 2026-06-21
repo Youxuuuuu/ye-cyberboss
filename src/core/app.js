@@ -1360,12 +1360,12 @@ class CyberbossApp {
       });
       return;
     }
-    console.log(
+    logApprovalTrace(
       `[cyberboss] approval response requested thread=${threadId} requestId=${approval.requestId} mode=${approvalResponse.result ? "result" : "decision"} workspace=${workspaceRoot}`
     );
     await this.runtimeAdapter.respondApproval(approvalResponse);
     this.runtimeAdapter.getSessionStore().clearApprovalPrompt(threadId);
-    console.log(
+    logApprovalTrace(
       `[cyberboss] approval response delivered thread=${threadId} requestId=${approval.requestId}`
     );
     if (command.name === "always" && isApprovalAcceptResponse(approvalResponse)) {
@@ -1396,7 +1396,9 @@ class CyberbossApp {
     const workspaceRoot = this.resolveWorkspaceRoot(bindingKey);
     const query = normalizeCommandArgument(command.args);
     const sessionStore = this.runtimeAdapter.getSessionStore();
-    const catalog = sessionStore.getAvailableModelCatalog();
+    const catalog = typeof this.runtimeAdapter.listAvailableModels === "function"
+      ? await this.runtimeAdapter.listAvailableModels()
+      : sessionStore.getAvailableModelCatalog();
     const currentModel = sessionStore.getRuntimeParamsForWorkspace(bindingKey, workspaceRoot).model;
 
     if (!query) {
@@ -1560,7 +1562,7 @@ class CyberbossApp {
         threadState?.pendingApproval?.requestId != null
         && String(threadState.pendingApproval.requestId).trim() !== String(event.payload.requestId ?? "").trim()
       ) {
-        console.log(
+        logApprovalTrace(
           `[cyberboss] approval queued thread=${event.payload.threadId} requestId=${event.payload.requestId}`
         );
         return;
@@ -1569,7 +1571,7 @@ class CyberbossApp {
       const promptSignature = buildApprovalPromptSignature(event.payload);
       if (promptState?.signature && promptState.signature === promptSignature) {
         sessionStore.rememberApprovalPrompt(event.payload.threadId, event.payload.requestId, promptSignature);
-        console.log(
+        logApprovalTrace(
           `[cyberboss] approval prompt deduped thread=${event.payload.threadId} requestId=${event.payload.requestId}`
         );
         return;
@@ -1644,7 +1646,7 @@ class CyberbossApp {
       );
       return;
     }
-    console.log(
+    logApprovalTrace(
       `[cyberboss] approval prompt sending binding=${bindingKey} user=${target.userId} requestId=${approval?.requestId || ""}`
     );
     await this.channelAdapter.sendTyping({
@@ -1658,7 +1660,7 @@ class CyberbossApp {
       contextToken: target.contextToken,
       preserveBlock: true,
     });
-    console.log(
+    logApprovalTrace(
       `[cyberboss] approval prompt delivered binding=${bindingKey} user=${target.userId} requestId=${approval?.requestId || ""}`
     );
   }
@@ -2365,6 +2367,14 @@ function formatWechatLocalTime(receivedAt) {
     minute: "2-digit",
     hour12: false,
   }).format(parsed).replace(/\//g, "-");
+}
+
+function logApprovalTrace(message) {
+  const value = String(process.env.CYBERBOSS_DEBUG_APPROVALS || "").trim().toLowerCase();
+  if (!["1", "true", "yes", "on"].includes(value)) {
+    return;
+  }
+  console.log(message);
 }
 
 function stringifyRpcId(value) {

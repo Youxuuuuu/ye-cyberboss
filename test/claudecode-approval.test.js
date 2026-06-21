@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 const fs = require("node:fs");
@@ -187,6 +188,67 @@ test("claudecode adapter hydrates model from Claude project transcript", async (
     model: "claude-sonnet-4-6",
     modelProvider: "",
   });
+});
+
+test("claudecode adapter lists available models from the configured Claude gateway", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-claude-model-list-"));
+  const stateDir = path.join(tempDir, "state");
+  const claudeConfigDir = path.join(tempDir, "claude");
+  const sessionsFile = path.join(tempDir, "sessions.json");
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.mkdirSync(claudeConfigDir, { recursive: true });
+
+  const requests = [];
+  const server = http.createServer((request, response) => {
+    requests.push({
+      url: request.url,
+      authorization: request.headers.authorization,
+    });
+    if (request.url !== "/v1/models") {
+      response.statusCode = 404;
+      response.end("not found");
+      return;
+    }
+    response.setHeader("Content-Type", "application/json");
+    response.end(JSON.stringify({
+      data: [
+        { id: "deepseek-v4-flash" },
+        { id: "sensenova-6.7-flash-lite" },
+      ],
+    }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  fs.writeFileSync(path.join(claudeConfigDir, "settings.json"), JSON.stringify({
+    env: {
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:${port}`,
+      ANTHROPIC_AUTH_TOKEN: "test-token",
+    },
+  }, null, 2));
+
+  const adapter = createClaudeCodeRuntimeAdapter({
+    stateDir,
+    sessionsFile,
+    claudeConfigDir,
+  });
+
+  try {
+    const catalog = await adapter.listAvailableModels();
+    const cachedCatalog = await adapter.listAvailableModels();
+    assert.deepEqual(catalog?.models?.map((item) => item.model), [
+      "deepseek-v4-flash",
+      "sensenova-6.7-flash-lite",
+    ]);
+    assert.deepEqual(cachedCatalog, catalog);
+    assert.deepEqual(requests, [{
+      url: "/v1/models",
+      authorization: "Bearer test-token",
+    }]);
+  } finally {
+    await adapter.close();
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  }
 });
 
 test("claudecode adapter remembers model observed in stream messages", async () => {

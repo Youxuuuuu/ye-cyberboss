@@ -1,15 +1,19 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const http = require("http");
+const https = require("https");
 const { ClaudeCodeProcessClient } = require("./process-client");
 const { mapClaudeCodeMessageToRuntimeEvent } = require("./events");
 const { ensureClaudeProjectMcpConfig } = require("./project-settings");
 const { SessionStore } = require("../codex/session-store");
+const { normalizeModelCatalog } = require("../codex/model-catalog");
 const { buildOpeningTurnText, buildInstructionRefreshText } = require("../shared-instructions");
 const { ClaudeCodeIpcServer } = require("./ipc-server");
 const { resolveClaudeCodeIpcConfig } = require("./ipc-paths");
 const { normalizeWorkspaceRoot } = require("../../../core/workspace-root");
 const CLAUDE_RESUME_SESSION_TIMEOUT_MS = 8000;
+const CLAUDE_MODEL_CATALOG_TTL_MS = 5 * 60 * 1000;
 
 function createClaudeCodeRuntimeAdapter(config) {
   const sessionStore = new SessionStore({ filePath: config.sessionsFile, runtimeId: "claudecode" });
@@ -17,6 +21,7 @@ function createClaudeCodeRuntimeAdapter(config) {
   const pendingApprovals = new Map();
   const pendingModelByWorkspaceRoot = new Map();
   const configuredModel = normalizeText(config.claudeModel);
+  let availableModelCatalogCache = null;
   let globalListener = null;
   const ipcConfig = resolveClaudeCodeIpcConfig({ stateDir: config.stateDir });
   const ipcServer = new ClaudeCodeIpcServer(ipcConfig);
@@ -186,6 +191,32 @@ function createClaudeCodeRuntimeAdapter(config) {
         nativeImageInput: false,
         toolImageRead: hasClaudeImageFileRead(effectiveModel),
       };
+    },
+    async listAvailableModels() {
+      if (
+        availableModelCatalogCache
+        && Date.now() - Date.parse(availableModelCatalogCache.updatedAt || "") < CLAUDE_MODEL_CATALOG_TTL_MS
+      ) {
+        return availableModelCatalogCache;
+      }
+      const gatewayConfig = resolveClaudeGatewayConfig({ claudeConfigDir: config.claudeConfigDir });
+      if (!gatewayConfig.baseUrl || !gatewayConfig.authToken) {
+        return availableModelCatalogCache;
+      }
+      try {
+        const response = await fetchClaudeGatewayModels(gatewayConfig);
+        const models = normalizeModelCatalog(response?.data);
+        if (!models.length) {
+          return availableModelCatalogCache;
+        }
+        availableModelCatalogCache = {
+          models,
+          updatedAt: new Date().toISOString(),
+        };
+        return availableModelCatalogCache;
+      } catch {
+        return availableModelCatalogCache;
+      }
     },
     async initialize() {
       hydrateRuntimeModelsFromClaudeProjects();
@@ -443,6 +474,112 @@ function resolveClaudeProjectTranscriptPath({ claudeConfigDir = "", workspaceRoo
   }
   const baseDir = normalizeText(claudeConfigDir) || path.join(os.homedir(), ".claude");
   return path.join(baseDir, "projects", encodeClaudeProjectPath(normalizedWorkspaceRoot), `${normalizedThreadId}.jsonl`);
+}
+
+function resolveClaudeGatewayConfig({ claudeConfigDir = "" } = {}) {
+  const baseDir = normalizeText(claudeConfigDir) || path.join(os.homedir(), ".claude");
+  const settings = readClaudeSettings(baseDir);
+  const env = {
+    ...(process.env || {}),
+    ...(settings?.env && typeof settings.env === "object" ? settings.env : {}),
+  };
+  return {
+    baseUrl: normalizeText(env.ANTHROPIC_BASE_URL || env.ANTHROPIC_API_URL),
+    authToken: normalizeText(env.ANTHROPIC_AUTH_TOKEN || env.ANTHROPIC_API_KEY),
+  };
+}
+
+function readClaudeSettings(baseDir) {
+  const settingsPath = path.join(baseDir, "settings.json");
+  try {
+    return JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+async function fetchClaudeGatewayModels({ baseUrl = "", authToken = "" } = {}) {
+  const modelsUrl = buildClaudeModelsUrl(baseUrl);
+  if (!modelsUrl || !authToken) {
+    return { data: [] };
+  }
+  const response = await requestJson(modelsUrl, {
+    headers: {
+      Authorization: `Bearer ${authToken}`,
+    },
+  });
+  const data = Array.isArray(response?.data)
+    ? response.data
+    : Array.isArray(response?.result?.data)
+      ? response.result.data
+      : [];
+  return { data };
+}
+
+function buildClaudeModelsUrl(baseUrl) {
+  const normalizedBaseUrl = normalizeText(baseUrl);
+  if (!normalizedBaseUrl) {
+    return "";
+  }
+  let parsed;
+  try {
+    parsed = new URL(normalizedBaseUrl);
+  } catch {
+    return "";
+  }
+  const trimmedPath = parsed.pathname.replace(/\/+$/g, "");
+  if (trimmedPath.endsWith("/v1/models")) {
+    parsed.pathname = trimmedPath;
+  } else if (trimmedPath.endsWith("/v1")) {
+    parsed.pathname = `${trimmedPath}/models`;
+  } else if (!trimmedPath || trimmedPath === "/") {
+    parsed.pathname = "/v1/models";
+  } else {
+    parsed.pathname = `${trimmedPath}/v1/models`;
+  }
+  parsed.search = "";
+  parsed.hash = "";
+  return parsed.toString();
+}
+
+function requestJson(url, { headers = {}, timeoutMs = 10_000 } = {}) {
+  return new Promise((resolve, reject) => {
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    const client = parsed.protocol === "https:" ? https : http;
+    const request = client.request(parsed, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        ...headers,
+      },
+    }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => {
+        const body = Buffer.concat(chunks).toString("utf8");
+        if ((response.statusCode || 500) >= 400) {
+          reject(new Error(`claude model catalog request failed (${response.statusCode || 500})`));
+          return;
+        }
+        try {
+          resolve(body ? JSON.parse(body) : {});
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+    request.setTimeout(timeoutMs, () => {
+      request.destroy(new Error("claude model catalog request timed out"));
+    });
+    request.on("error", reject);
+    request.end();
+  });
 }
 
 function encodeClaudeProjectPath(workspaceRoot) {

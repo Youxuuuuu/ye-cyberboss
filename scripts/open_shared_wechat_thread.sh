@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PORT="${CYBERBOSS_SHARED_PORT:-8765}"
 REMOTE_URL="ws://127.0.0.1:${PORT}"
-STATE_DIR="${CYBERBOSS_STATE_DIR:-$HOME/.cyberboss}"
+STATE_DIR="${CYBERBOSS_STATE_DIR:-D:/study/.cyberboss}"
 LOG_DIR="${STATE_DIR}/logs"
 PID_FILE="${LOG_DIR}/shared-wechat.pid"
 

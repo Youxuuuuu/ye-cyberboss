@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="${0:A:h:h}"
 PORT="${CYBERBOSS_SHARED_PORT:-8765}"
 LISTEN_URL="ws://127.0.0.1:${PORT}"
-STATE_DIR="${CYBERBOSS_STATE_DIR:-$HOME/.cyberboss}"
+STATE_DIR="${CYBERBOSS_STATE_DIR:-D:/study/.cyberboss}"
 LOG_DIR="${STATE_DIR}/logs"
 PID_FILE="${LOG_DIR}/shared-app-server.pid"
 LOG_FILE="${LOG_DIR}/shared-app-server.log"
