@@ -65,7 +65,7 @@ function createCodexRuntimeAdapter(config) {
       const runtimeClient = ensureClient();
       return runtimeClient.onMessage((message) => {
         const event = mapCodexMessageToRuntimeEvent(message);
-        if (event) {
+        if (event || message) {
           listener(event, message);
         }
       });

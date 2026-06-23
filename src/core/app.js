@@ -31,6 +31,7 @@ const { SystemMessageQueueStore } = require("./system-message-queue-store");
 const { SystemMessageDispatcher } = require("./system-message-dispatcher");
 const { TimelineScreenshotQueueStore } = require("./timeline-screenshot-queue-store");
 const { TurnGateStore } = require("./turn-gate-store");
+const { createConversationArchive } = require("./conversation");
 const { normalizeWorkspaceRoot } = require("./workspace-root");
 const { ReminderQueueStore } = require("../adapters/channel/weixin/reminder-queue-store");
 const {
@@ -83,6 +84,7 @@ class CyberbossApp {
     this.pendingImageInboundByScope = new Map();
     this.turnBoundaryScopeKeys = new Set();
     this.systemMessageDispatcher = null;
+    this.conversationArchive = createConversationArchive({ config });
     this.streamDelivery = new StreamDelivery({
       channelAdapter: this.channelAdapter,
       sessionStore: this.runtimeAdapter.getSessionStore(),
@@ -91,11 +93,19 @@ class CyberbossApp {
     });
     this.pendingOperationByRunKey = new Map();
     this.runtimeEventChain = Promise.resolve();
-    this.runtimeAdapter.onEvent((event) => {
-      this.threadStateStore.applyRuntimeEvent(event);
+    this.runtimeAdapter.onEvent((event, raw) => {
       this.runtimeEventChain = this.runtimeEventChain
         .catch(() => {})
-        .then(() => this.handleRuntimeEvent(event))
+        .then(() => {
+          if (event) {
+            this.threadStateStore.applyRuntimeEvent(event);
+          }
+          this.recordConversationRuntimeRaw(event, raw);
+          if (event) {
+            return this.handleRuntimeEvent(event);
+          }
+          return null;
+        })
         .catch((error) => {
           const message = error instanceof Error ? error.stack || error.message : String(error);
           console.error(`[cyberboss] runtime event handling failed type=${event?.type || "(unknown)"} ${message}`);
@@ -428,6 +438,12 @@ class CyberbossApp {
 
   async dispatchPreparedTurn({ bindingKey, workspaceRoot, prepared }) {
     const pendingScopeKey = this.turnGateStore.begin(bindingKey, workspaceRoot);
+    this.recordConversationInbound(prepared, {
+      runtimeId: this.runtimeAdapter.describe().id,
+      threadId: this.runtimeAdapter.getSessionStore().getThreadIdForWorkspace(bindingKey, workspaceRoot) || "",
+      turnId: "",
+      workspaceRoot,
+    });
     await this.channelAdapter.sendTyping({
       userId: prepared.senderId,
       status: 1,
@@ -1471,6 +1487,43 @@ class CyberbossApp {
   resolveWorkspaceRoot(bindingKey) {
     const sessionStore = this.runtimeAdapter.getSessionStore();
     return sessionStore.getActiveWorkspaceRoot(bindingKey) || normalizeWorkspaceRoot(this.config.workspaceRoot);
+  }
+
+  recordConversationInbound(prepared, context = {}) {
+    try {
+      this.conversationArchive?.recordInboundMessage(prepared, context);
+    } catch (error) {
+      console.warn(`[cyberboss] conversation inbound archive failed: ${formatErrorMessage(error)}`);
+    }
+  }
+
+  recordConversationRuntimeRaw(event, raw) {
+    try {
+      this.conversationArchive?.recordRuntimeRaw({
+        runtimeId: this.runtimeAdapter.describe().id,
+        raw,
+        mappedEvent: event,
+        workspaceRoot: this.resolveConversationWorkspaceRoot(event),
+      });
+    } catch (error) {
+      console.warn(`[cyberboss] conversation runtime archive failed: ${formatErrorMessage(error)}`);
+    }
+  }
+
+  resolveConversationWorkspaceRoot(event) {
+    const eventWorkspaceRoot = normalizeWorkspaceRoot(event?.payload?.workspaceRoot || "");
+    if (eventWorkspaceRoot) {
+      return eventWorkspaceRoot;
+    }
+    const threadId = normalizeCommandArgument(event?.payload?.threadId);
+    if (threadId) {
+      const linked = this.runtimeAdapter.getSessionStore().findBindingForThreadId(threadId);
+      const linkedWorkspaceRoot = normalizeWorkspaceRoot(linked?.workspaceRoot || "");
+      if (linkedWorkspaceRoot) {
+        return linkedWorkspaceRoot;
+      }
+    }
+    return normalizeWorkspaceRoot(this.config.workspaceRoot);
   }
 
   async handleRuntimeEvent(event) {

@@ -103,7 +103,7 @@ function createClaudeCodeRuntimeAdapter(config) {
       if (mapped?.type === "runtime.turn.failed") {
         clientsByWorkspace.delete(normalizedWorkspaceRoot);
       }
-      if (mapped && globalListener) {
+      if (globalListener && (mapped || raw)) {
         globalListener(mapped, raw);
       }
     });
