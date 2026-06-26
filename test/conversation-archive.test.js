@@ -170,6 +170,7 @@ test("codex realtime tails raw session lines, uses real source lines, and dedupe
     config: {
       conversationDir: path.join(stateDir, "conversations"),
       stateDir,
+      pendingInboundTtlMs: 365 * 24 * 60 * 60 * 1000,
     },
   })
 
@@ -233,9 +234,14 @@ test("codex realtime tails raw session lines, uses real source lines, and dedupe
   assert.ok(dayRecords.some((record) => record.type === "operation" && record.text === "[cyberboss_channel_send_file] attachment.png"))
   assert.ok(dayRecords.some((record) => record.type === "assistant" && record.text === "codex realtime reply"))
   const userRecord = dayRecords.find((record) => record.type === "user" && record.text === "hello realtime")
+  assert.equal(userRecord.source.provider, "codex")
   assert.equal(userRecord.source.sourceLine, 3)
+  assert.equal(userRecord.meta.messageId, "wx-1")
   assert.equal(userRecord.meta.attachments.length, 1)
   assert.equal(userRecord.meta.attachments[0].relativePath, "inbox/2026-06-23/attachment.png")
+  assert.equal(userRecord.meta.sourceKey, userRecord.source.sourceKey)
+  assert.match(userRecord.id, /^codex:[0-9a-f]{16}$/u)
+  assert.equal(userRecord.id.includes(sourceFile), false)
 
   const operation = dayRecords.find((record) => record.type === "operation" && record.meta.toolName === "cyberboss_channel_send_file")
   const media = dayRecords.find((record) => record.type === "assistant" && record.text === "Sent file attachment.png")
@@ -309,6 +315,98 @@ test("claudecode realtime tails transcript once and merges tool_use plus tool_re
   assert.equal(visible.source.sourceLine, 3)
 })
 
+test("realtime media-only user records merge pending inbound once for image and file", () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-media-only-"))
+  const sourceFile = path.join(stateDir, "codex-media-only.jsonl")
+  const imageFile = path.join(stateDir, "inbox", "2026-06-26", "a.png")
+  const textFile = path.join(stateDir, "inbox", "2026-06-26", "a.txt")
+  fs.mkdirSync(path.dirname(imageFile), { recursive: true })
+  fs.writeFileSync(imageFile, "png", "utf8")
+  fs.writeFileSync(textFile, "txt", "utf8")
+
+  writeJsonlFixture(sourceFile, [
+    sessionMeta("codex-media-only-1", "2026-06-26T02:00:00.000Z"),
+    turnContext("turn-image-1", "2026-06-26T02:00:00.010Z"),
+    responseUser([
+      "Saved attachments:",
+      `- [image] ${toSlash(imageFile)}`,
+      "Use the saved local files if they are needed for the request.",
+    ].join("\n"), "2026-06-26T02:00:00.020Z"),
+    turnContext("turn-file-1", "2026-06-26T02:00:01.000Z"),
+    responseUser([
+      "Saved attachments:",
+      `- [file] ${toSlash(textFile)}`,
+      "Use the saved local files if they are needed for the request.",
+    ].join("\n"), "2026-06-26T02:00:01.020Z"),
+  ])
+
+  const archive = new ConversationArchive({
+    config: {
+      conversationDir: path.join(stateDir, "conversations"),
+      stateDir,
+      realtimePollIntervalMs: 60_000,
+      pendingInboundTtlMs: 365 * 24 * 60 * 60 * 1000,
+    },
+  })
+
+  archive.recordInboundMessage({
+    provider: "weixin",
+    messageId: "wx-image-1",
+    receivedAt: "2026-06-26T02:00:00.005Z",
+    attachments: [{ path: imageFile, kind: "image", fileName: "a.png" }],
+  }, {
+    runtimeId: "codex",
+    threadId: "codex-media-only-1",
+    workspaceRoot: WORKSPACE_ROOT,
+  })
+
+  archive.recordInboundMessage({
+    provider: "weixin",
+    messageId: "wx-file-1",
+    receivedAt: "2026-06-26T02:00:01.005Z",
+    attachments: [{ path: textFile, kind: "file", fileName: "a.txt" }],
+  }, {
+    runtimeId: "codex",
+    threadId: "codex-media-only-1",
+    workspaceRoot: WORKSPACE_ROOT,
+  })
+
+  const lines = fs.readFileSync(sourceFile, "utf8")
+    .split(/\r?\n/u)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+
+  lines.forEach((raw, index) => {
+    archive.ingestRealtimeSessionLine({
+      runtimeId: "codex",
+      raw,
+      sourceFile,
+      sourceLine: index + 1,
+      workspaceRoot: WORKSPACE_ROOT,
+    })
+  })
+
+  const dayRecords = readConversationDay(stateDir, "2026-06-26")
+  const userRecords = dayRecords.filter((record) => record.type === "user")
+  assert.equal(userRecords.length, 2)
+
+  const imageRecord = userRecords.find((record) => record.meta.attachments.some((item) => item.fileName === "a.png"))
+  assert.ok(imageRecord)
+  assert.equal(imageRecord.source.provider, "codex")
+  assert.equal(imageRecord.meta.messageId, "wx-image-1")
+  assert.equal(imageRecord.meta.attachments.length, 1)
+  assert.equal(imageRecord.meta.files.length, 0)
+
+  const fileRecord = userRecords.find((record) => record.meta.files.some((item) => item.fileName === "a.txt"))
+  assert.ok(fileRecord)
+  assert.equal(fileRecord.source.provider, "codex")
+  assert.equal(fileRecord.meta.messageId, "wx-file-1")
+  assert.equal(fileRecord.meta.attachments.length, 0)
+  assert.equal(fileRecord.meta.files.length, 1)
+
+  assert.equal(dayRecords.some((record) => record.source.provider === "weixin"), false)
+})
+
 test("codex import extracts saved attachments into canonical user media without duplicate user rows", () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-codex-media-"))
   const sourceFile = path.join(stateDir, "codex-media.jsonl")
@@ -331,7 +429,7 @@ test("codex import extracts saved attachments into canonical user media without 
       "",
       "Saved attachments:",
       `- [image] ${imageFile}`,
-      `- [file] ${textFile}`,
+      `- [file] ${textFile} (original name: 小诗.txt)`,
       `- [sticker] ${stickerFile}`,
       "Use the saved local files if they are needed for the request.",
       "",
@@ -364,6 +462,10 @@ test("codex import extracts saved attachments into canonical user media without 
   assert.equal(userRecords[0].meta.attachments[0].relativePath, "inbox/2026-06-25/attachment-2.png")
   assert.equal(userRecords[0].meta.files[0].relativePath, "inbox/2026-06-25/小诗.txt")
   assert.equal(userRecords[0].meta.stickers[0].relativePath, "stickers/assets/stk_025.gif")
+  assert.equal(userRecords[0].meta.files[0].filePath.includes("(original name:"), false)
+  assert.equal(userRecords[0].id.includes(sourceFile), false)
+  assert.match(userRecords[0].id, /^codex:[0-9a-f]{16}$/u)
+  assert.equal(userRecords[0].meta.sourceKey, userRecords[0].source.sourceKey)
 })
 
 test("shell command operations classify grep glob read write edit with short paths", () => {

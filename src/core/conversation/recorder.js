@@ -21,9 +21,9 @@ class ConversationArchive {
     })
     this.pendingInboundUserRecords = []
     this.trackedRealtimeSources = new Map()
-    this.inboundFallbackDelayMs = Number(this.config.inboundFallbackDelayMs) > 0
-      ? Number(this.config.inboundFallbackDelayMs)
-      : 4000
+    this.pendingInboundTtlMs = Number(this.config.pendingInboundTtlMs) > 0
+      ? Number(this.config.pendingInboundTtlMs)
+      : 10 * 60 * 1000
     this.realtimePollIntervalMs = Number(this.config.realtimePollIntervalMs) > 0
       ? Number(this.config.realtimePollIntervalMs)
       : 1500
@@ -42,6 +42,7 @@ class ConversationArchive {
       return { writtenCount: 0, warnings: [] }
     }
 
+    this.cleanupExpiredPendingInboundRecords()
     const quote = extractQuote(prepared.originalText || prepared.text || "")
     const attachments = normalizeMediaList(prepared.attachments, {
       workspaceRoot: context.workspaceRoot,
@@ -64,7 +65,6 @@ class ConversationArchive {
       rawId: normalizeText(prepared.messageId) || buildInboundRawId(prepared),
     }
     this.pendingInboundUserRecords.push(entry)
-    this.scheduleInboundFallback(entry)
     return { writtenCount: 0, warnings: [] }
   }
 
@@ -118,6 +118,7 @@ class ConversationArchive {
     const records = []
     const warnings = []
     const trackedEntries = [...this.trackedRealtimeSources.entries()]
+    this.cleanupExpiredPendingInboundRecords()
 
     for (const [sourceFile, context] of trackedEntries) {
       const lines = this.tailer.readAvailableLines(sourceFile)
@@ -141,8 +142,6 @@ class ConversationArchive {
       }
     }
 
-    const fallbackRecords = this.collectReadyInboundFallbackRecords()
-    records.push(...fallbackRecords)
     this.updateLastTimestamp(records)
     if (!records.length) {
       return { writtenCount: 0, warnings }
@@ -244,6 +243,7 @@ class ConversationArchive {
   }
 
   findMatchingPendingInbound(record) {
+    this.cleanupExpiredPendingInboundRecords()
     const candidates = this.pendingInboundUserRecords.filter((entry) => (
       entry.runtimeId === normalizeText(record.runtimeId)
       && (!entry.threadId || !record.threadId || entry.threadId === record.threadId)
@@ -261,14 +261,38 @@ class ConversationArchive {
       return exact
     }
 
-    if (hasMedia(record.meta)) {
-      const mediaCandidate = candidates.find((entry) => hasMedia(entry))
-      if (mediaCandidate) {
-        return mediaCandidate
+    if (!text && hasMedia(record.meta)) {
+      const mediaCandidates = candidates.filter((entry) => hasMedia(entry))
+      if (!mediaCandidates.length) {
+        return null
+      }
+      const recordMediaSignature = buildMediaSignature(record.meta)
+      if (recordMediaSignature) {
+        const exactMedia = mediaCandidates.find((entry) => buildMediaSignature(entry) === recordMediaSignature)
+        if (exactMedia) {
+          return exactMedia
+        }
+      }
+      if (mediaCandidates.length === 1) {
+        return mediaCandidates[0]
       }
     }
 
-    return candidates[0] || null
+    return null
+  }
+
+  cleanupExpiredPendingInboundRecords(now = Date.now()) {
+    if (!Number.isFinite(this.pendingInboundTtlMs) || this.pendingInboundTtlMs <= 0) {
+      return
+    }
+    this.pendingInboundUserRecords = this.pendingInboundUserRecords.filter((entry) => {
+      const receivedAtMs = Date.parse(entry?.receivedAt || "")
+      const keep = Number.isFinite(receivedAtMs) && (now - receivedAtMs) < this.pendingInboundTtlMs
+      if (!keep && entry?.timer) {
+        clearTimeout(entry.timer)
+      }
+      return keep
+    })
   }
 
   scheduleInboundFallback(entry) {
@@ -406,13 +430,14 @@ function extractThreadId(runtimeId, raw, mappedEvent) {
 }
 
 function hasMedia(subject = {}) {
-  return Array.isArray(subject?.attachments)
-    ? subject.attachments.length > 0
-    : (
-      (Array.isArray(subject?.meta?.attachments) && subject.meta.attachments.length > 0)
-      || (Array.isArray(subject?.meta?.files) && subject.meta.files.length > 0)
-      || (Array.isArray(subject?.meta?.stickers) && subject.meta.stickers.length > 0)
-    )
+  return (
+    (Array.isArray(subject?.attachments) && subject.attachments.length > 0)
+    || (Array.isArray(subject?.files) && subject.files.length > 0)
+    || (Array.isArray(subject?.stickers) && subject.stickers.length > 0)
+    || (Array.isArray(subject?.meta?.attachments) && subject.meta.attachments.length > 0)
+    || (Array.isArray(subject?.meta?.files) && subject.meta.files.length > 0)
+    || (Array.isArray(subject?.meta?.stickers) && subject.meta.stickers.length > 0)
+  )
 }
 
 function mergeMediaArrays(left = [], right = []) {
@@ -427,6 +452,22 @@ function mergeMediaArrays(left = [], right = []) {
     result.push(item)
   }
   return result
+}
+
+function buildMediaSignature(subject = {}) {
+  const items = [
+    ...(Array.isArray(subject?.attachments) ? subject.attachments : []),
+    ...(Array.isArray(subject?.files) ? subject.files : []),
+    ...(Array.isArray(subject?.stickers) ? subject.stickers : []),
+    ...(Array.isArray(subject?.meta?.attachments) ? subject.meta.attachments : []),
+    ...(Array.isArray(subject?.meta?.files) ? subject.meta.files : []),
+    ...(Array.isArray(subject?.meta?.stickers) ? subject.meta.stickers : []),
+  ]
+  const normalized = items
+    .map((item) => normalizeText(item?.filePath || item?.path || item?.relativePath || item?.stickerId || item?.fileName))
+    .filter(Boolean)
+    .sort()
+  return normalized.length ? normalized.join("|") : ""
 }
 
 function normalizeText(value) {

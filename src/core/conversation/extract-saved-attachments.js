@@ -15,8 +15,8 @@ function extractSavedAttachmentsFromText(text = "", context = {}) {
 
   const itemPattern = /^\s*-\s*\[(image|file|sticker)\]\s+(.+?)\s*$/gimu
   for (const match of normalized.matchAll(itemPattern)) {
-    const kind = normalizeAttachmentKind(match[1], match[2])
-    const filePath = normalizeText(match[2])
+    const filePath = cleanAttachmentPath(match[2])
+    const kind = normalizeAttachmentKind(match[1], filePath)
     if (!filePath) {
       continue
     }
@@ -69,11 +69,19 @@ function normalizeAttachmentKind(kind = "", filePath = "") {
   return "image"
 }
 
+function cleanAttachmentPath(value = "") {
+  return normalizeText(value)
+    .replace(/\s+\(original name:\s*[^)]*\)\s*$/iu, "")
+    .replace(/^["']|["']$/gu, "")
+    .trim()
+}
+
 function normalizeText(value) {
   return typeof value === "string" ? value.trim() : ""
 }
 
 module.exports = {
+  cleanAttachmentPath,
   extractSavedAttachmentsFromText,
   trimSyntheticPrompt,
 }

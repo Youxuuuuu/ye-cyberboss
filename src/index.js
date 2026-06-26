@@ -12,6 +12,7 @@ const { ensureStickerCatalogFilesSync } = require("./services/sticker-service");
 const { createProjectTooling } = require("./tools/create-project-tooling");
 const { runToolMcpServer } = require("./tools/mcp-stdio-server");
 const { normalizeWorkspaceRoot } = require("./core/workspace-root");
+const { ConversationImporter } = require("./core/conversation");
 
 function ensureDefaultStateDirectory() {
   fs.mkdirSync(path.join(os.homedir(), ".cyberboss"), { recursive: true });
@@ -142,10 +143,70 @@ async function main() {
     return;
   }
 
+  if (command === "conversation:import") {
+    await runConversationImportCommand({
+      args: argv.slice(1),
+      config,
+    });
+    return;
+  }
+
   throw new Error(`Unknown command: ${command}`);
 }
 
 module.exports = { main };
+
+async function runConversationImportCommand({ args = [], config = {} } = {}) {
+  const runtimeId = normalizeRuntimeId(
+    readFlagValue(args, "--runtime")
+    || readFlagValue(args, "--runtime-id")
+  );
+  const sourceFile = readFlagValue(args, "--source-file") || readFlagValue(args, "--source");
+  if (!runtimeId) {
+    throw new Error("conversation:import requires --runtime <codex|claudecode>");
+  }
+  if (!sourceFile) {
+    throw new Error("conversation:import requires --source-file <path>");
+  }
+
+  const conversationDir = readFlagValue(args, "--conversation-dir") || config.conversationDir;
+  const stateDir = readFlagValue(args, "--state-dir") || config.stateDir;
+  const workspaceRoot = normalizeWorkspaceRoot(
+    readFlagValue(args, "--workspace-root")
+    || config.workspaceRoot
+    || process.cwd()
+  );
+  if (!conversationDir) {
+    throw new Error("conversation:import could not resolve conversationDir");
+  }
+  if (!stateDir) {
+    throw new Error("conversation:import could not resolve stateDir");
+  }
+
+  const importer = new ConversationImporter({
+    config: {
+      conversationDir,
+      stateDir,
+    },
+    logger: console,
+  });
+
+  const result = importer.importFile({
+    runtimeId,
+    sourceFile,
+    workspaceRoot,
+  });
+
+  console.log(`[cyberboss] conversation import complete`);
+  console.log(`runtimeId: ${runtimeId}`);
+  console.log(`sourceFile: ${sourceFile}`);
+  console.log(`conversationDir: ${conversationDir}`);
+  console.log(`stateDir: ${stateDir}`);
+  console.log(`workspaceRoot: ${workspaceRoot}`);
+  console.log(`importedCount: ${result.importedCount}`);
+  console.log(`writtenCount: ${result.writtenCount}`);
+  console.log(`warnings: ${result.warnings.length}`);
+}
 
 function readFlagValue(args, flag) {
   if (!Array.isArray(args)) {
@@ -155,6 +216,14 @@ function readFlagValue(args, flag) {
     if (args[index] === flag) {
       return String(args[index + 1] || "").trim();
     }
+  }
+  return "";
+}
+
+function normalizeRuntimeId(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "codex" || normalized === "claudecode") {
+    return normalized;
   }
   return "";
 }

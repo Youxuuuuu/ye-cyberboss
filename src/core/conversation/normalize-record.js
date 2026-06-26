@@ -1,3 +1,5 @@
+const crypto = require("crypto")
+
 const {
   ALLOWED_META_KEYS,
   validateConversationRecord,
@@ -24,7 +26,7 @@ function normalizeConversationRecord(input = {}) {
   })
   const meta = normalizeMeta(input.meta, source.sourceKey)
   const record = {
-    id: normalizeText(input.id) || source.sourceKey,
+    id: normalizeText(input.id) || buildRecordId(source.sourceKey),
     type: normalizeText(input.type),
     timestamp,
     date: toShanghaiDate(timestamp),
@@ -42,6 +44,16 @@ function normalizeConversationRecord(input = {}) {
     throw new Error(errors.join("; "))
   }
   return record
+}
+
+function buildRecordId(sourceKey = "") {
+  const normalized = normalizeText(sourceKey)
+  if (!normalized) {
+    return ""
+  }
+  const provider = normalized.split("|")[0].split(":")[0] || "record"
+  const digest = crypto.createHash("sha1").update(normalized).digest("hex").slice(0, 16)
+  return `${provider}:${digest}`
 }
 
 function normalizeMeta(meta = {}, sourceKey = "") {
@@ -113,5 +125,6 @@ function normalizeText(value) {
 }
 
 module.exports = {
+  buildRecordId,
   normalizeConversationRecord,
 }

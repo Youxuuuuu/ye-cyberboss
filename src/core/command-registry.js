@@ -53,6 +53,13 @@ const COMMAND_GROUPS = [
         status: "active",
       },
       {
+        action: "conversation.import",
+        summary: "Import one raw Codex or ClaudeCode session JSONL into derived conversation JSONL",
+        terminal: ["conversation:import --runtime <codex|claudecode> --source-file <path>"],
+        weixin: [],
+        status: "active",
+      },
+      {
         action: "system.send",
         summary: "Write an invisible trigger message into the internal system queue",
         terminal: [],
@@ -367,6 +374,8 @@ function toTerminalCommandExample(commandText) {
     case "shared open":
     case "shared status":
       return `npm run ${normalized.replace(" ", ":")}`;
+    case "conversation:import --runtime <codex|claudecode> --source-file <path>":
+      return `cyberboss ${normalized}`;
     case "start --checkin":
       return "cyberboss start --checkin";
     default:
