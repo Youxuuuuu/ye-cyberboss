@@ -3,6 +3,7 @@ const {
   buildToolResultMeta,
   buildVisibleAssistantRecordFromToolCall,
 } = require("../normalize-operation")
+const { extractSavedAttachmentsFromText } = require("../extract-saved-attachments")
 const { buildConversationUserRecord } = require("../normalize-prompt")
 const { normalizeConversationRecord } = require("../normalize-record")
 const { normalizeMediaList } = require("../normalize-media")
@@ -17,6 +18,7 @@ class ClaudeCodeParser {
     this.currentTurnId = ""
     this.currentWorkspaceRoot = ""
     this.pendingOperations = new Map()
+    this.lastCanonicalUserByTurn = new Map()
   }
 
   parseRaw({ raw, workspaceRoot = "", sourceFile = "", sourceLine = 0 }) {
@@ -51,9 +53,16 @@ class ClaudeCodeParser {
     const turnId = normalizeText(raw.promptId || raw.uuid || this.currentTurnId)
     this.currentTurnId = turnId || this.currentTurnId
 
-    const attachments = extractClaudeAttachments(raw)
+    const extracted = extractSavedAttachmentsFromText(text, {
+      workspaceRoot: this.currentWorkspaceRoot,
+      stateDir: this.stateDir,
+    })
+    const attachments = [
+      ...extractClaudeAttachments(raw),
+      ...extracted.attachments,
+    ]
     const record = buildConversationUserRecord({
-      text,
+      text: extracted.text,
       timestamp: normalizeTimestamp(raw.timestamp),
       runtimeId: "claudecode",
       threadId: normalizeText(raw.sessionId) || this.currentThreadId,
@@ -61,6 +70,7 @@ class ClaudeCodeParser {
       workspaceRoot: this.currentWorkspaceRoot,
       meta: buildUserMeta({
         attachments,
+        visibleAttachments: attachments.filter((item) => item.kind !== "file"),
         workspaceRoot: this.currentWorkspaceRoot,
         stateDir: this.stateDir,
       }),
@@ -75,7 +85,7 @@ class ClaudeCodeParser {
       defaultSourceType: `claudecode.${this.mode}.user`,
       systemCompactSourceType: "claudecode.system_action_mode",
     })
-    return record ? [record] : []
+    return record ? [this.rememberCanonicalUserRecord(record)] : []
   }
 
   parseAssistantEntry({ raw, sourceFile, sourceLine }) {
@@ -137,6 +147,7 @@ class ClaudeCodeParser {
           runtimeId: "claudecode",
           mode: this.mode,
           toolName: normalizeToolName(item.name),
+          rawToolName: normalizeText(item.name),
           args: item.input && typeof item.input === "object" ? item.input : {},
           workspaceRoot: this.currentWorkspaceRoot,
           stateDir: this.stateDir,
@@ -242,6 +253,37 @@ class ClaudeCodeParser {
 
     return records
   }
+
+  rememberCanonicalUserRecord(record) {
+    if (!record || record.type !== "user") {
+      return record
+    }
+    const key = buildTurnKey(record.threadId, record.turnId)
+    if (key && !record.text && hasMedia(record.meta)) {
+      const existing = this.lastCanonicalUserByTurn.get(key)
+      if (existing) {
+        return normalizeConversationRecord({
+          type: "user",
+          timestamp: record.timestamp,
+          runtimeId: existing.runtimeId,
+          threadId: existing.threadId,
+          turnId: existing.turnId,
+          workspaceRoot: existing.workspaceRoot,
+          text: "",
+          meta: {
+            attachments: mergeMedia(existing.meta.attachments, record.meta.attachments),
+            files: mergeMedia(existing.meta.files, record.meta.files),
+            stickers: mergeMedia(existing.meta.stickers, record.meta.stickers),
+          },
+          source: existing.source,
+        })
+      }
+    }
+    if (key && !isSystemCompact(record)) {
+      this.lastCanonicalUserByTurn.set(key, snapshotUserRecord(record))
+    }
+    return record
+  }
 }
 
 function createClaudeCodeImportParser() {
@@ -252,7 +294,7 @@ function createClaudeCodeImportParser() {
 function buildUserMeta({ attachments = [], workspaceRoot = "", stateDir = "" } = {}) {
   const normalizedAttachments = normalizeMediaList(attachments, { workspaceRoot, stateDir })
   return {
-    attachments: normalizedAttachments,
+    attachments: normalizedAttachments.filter((item) => item.kind !== "file"),
     files: normalizedAttachments.filter((item) => item.kind === "file"),
     stickers: normalizedAttachments.filter((item) => item.kind === "sticker"),
   }
@@ -343,6 +385,52 @@ function isSilentActionText(text) {
 
 function normalizeText(value) {
   return typeof value === "string" ? value.trim() : ""
+}
+
+function buildTurnKey(threadId, turnId) {
+  const normalizedThreadId = normalizeText(threadId)
+  const normalizedTurnId = normalizeText(turnId)
+  return normalizedThreadId && normalizedTurnId ? `${normalizedThreadId}|${normalizedTurnId}` : ""
+}
+
+function hasMedia(meta = {}) {
+  return Array.isArray(meta?.attachments) && meta.attachments.length > 0
+}
+
+function isSystemCompact(record) {
+  return normalizeText(record?.meta?.visibleAs) === "system_compact"
+}
+
+function snapshotUserRecord(record) {
+  return {
+    runtimeId: record.runtimeId,
+    threadId: record.threadId,
+    turnId: record.turnId,
+    workspaceRoot: record.workspaceRoot,
+    meta: {
+      attachments: record.meta.attachments,
+      files: record.meta.files,
+      stickers: record.meta.stickers,
+    },
+    source: {
+      ...record.source,
+    },
+  }
+}
+
+function mergeMedia(left = [], right = []) {
+  const items = [...(Array.isArray(left) ? left : []), ...(Array.isArray(right) ? right : [])]
+  const result = []
+  const seen = new Set()
+  for (const item of items) {
+    const signature = JSON.stringify(item)
+    if (seen.has(signature)) {
+      continue
+    }
+    seen.add(signature)
+    result.push(item)
+  }
+  return result
 }
 
 module.exports = {

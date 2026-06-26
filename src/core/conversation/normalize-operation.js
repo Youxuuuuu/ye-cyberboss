@@ -12,6 +12,7 @@ function buildOperationDescriptor({
   runtimeId = "",
   mode = "",
   toolName = "",
+  rawToolName = "",
   args = {},
   fallbackText = "",
   outputText = "",
@@ -22,7 +23,7 @@ function buildOperationDescriptor({
     runtimeId,
     mode,
     payload: {
-      name: toolName,
+      name: rawToolName || toolName,
       input: args,
       output: outputText || fallbackText,
     },
@@ -43,6 +44,7 @@ function buildOperationDescriptor({
   return {
     text: buildOperationTextFromToolCall(normalizedToolCall, { workspaceRoot, stateDir }),
     meta: removeEmptyFields({
+      rawToolName: normalizedToolCall.rawToolName,
       toolName: normalizedToolCall.toolName || normalizeText(toolName),
       operationKind: normalizedToolCall.operationKind,
       displayPath: normalizedToolCall.displayPath,

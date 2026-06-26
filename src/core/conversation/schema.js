@@ -10,6 +10,7 @@ const ALLOWED_META_KEYS = new Set([
   "path",
   "pattern",
   "quote",
+  "rawToolName",
   "relativePath",
   "resultSummary",
   "runtimeEvent",
@@ -20,6 +21,7 @@ const ALLOWED_META_KEYS = new Set([
   "toolName",
   "toolResultPreview",
   "visibleAs",
+  "messageId",
 ])
 
 const ALLOWED_SOURCE_KEYS = new Set([

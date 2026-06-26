@@ -10,3 +10,4 @@ firmware/
 tmp-*
 examples/mcp/
 docs/*
+templates/*

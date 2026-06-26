@@ -43,10 +43,21 @@ class ConversationSourceLineResolver {
   resolveClaudeTranscriptPath({ threadId = "", workspaceRoot = "" } = {}) {
     const normalizedThreadId = normalizeThreadId(threadId)
     const normalizedWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot)
-    if (!normalizedThreadId || !normalizedWorkspaceRoot) {
+    if (!normalizedThreadId || !fs.existsSync(this.claudeProjectsDir)) {
       return ""
     }
-    return path.join(this.claudeProjectsDir, encodeClaudeProjectPath(normalizedWorkspaceRoot), `${normalizedThreadId}.jsonl`)
+    const projectDirCandidates = normalizedWorkspaceRoot
+      ? encodeClaudeProjectPathVariants(normalizedWorkspaceRoot).map((candidate) => path.join(this.claudeProjectsDir, candidate))
+      : []
+
+    for (const projectDir of projectDirCandidates) {
+      const candidatePath = path.join(projectDir, `${normalizedThreadId}.jsonl`)
+      if (fs.existsSync(candidatePath)) {
+        return candidatePath
+      }
+    }
+
+    return findClaudeTranscriptBySessionId(this.claudeProjectsDir, normalizedThreadId)
   }
 
   resolveCodexSessionPath({ threadId = "" } = {}) {
@@ -101,8 +112,57 @@ function buildThreadKey(runtimeId = "", threadId = "", workspaceRoot = "") {
   return [normalizedRuntimeId, normalizedThreadId, normalizedWorkspaceRoot].join("|")
 }
 
-function encodeClaudeProjectPath(workspaceRoot) {
-  return normalizeWorkspaceRoot(workspaceRoot).replace(/[\\/:\s]+/g, "-")
+function encodeClaudeProjectPathVariants(workspaceRoot) {
+  const normalized = normalizeWorkspaceRoot(workspaceRoot)
+  if (!normalized) {
+    return []
+  }
+  return Array.from(new Set([
+    normalized.replace(/[\\/:\s]+/g, "-"),
+    normalized.replace(/[\\/:\s]/g, "-"),
+    `-${normalized.replace(/[\\/:\s]/g, "-")}`,
+  ].filter(Boolean)))
+}
+
+function findClaudeTranscriptBySessionId(rootDir, threadId) {
+  const targetName = `${threadId}.jsonl`
+  const projectDirs = listDirectories(rootDir)
+  for (const projectDirName of projectDirs) {
+    const projectDir = path.join(rootDir, projectDirName)
+    const directMatch = path.join(projectDir, targetName)
+    if (fs.existsSync(directMatch)) {
+      return directMatch
+    }
+    const nestedMatch = findFileRecursive(projectDir, targetName, 2)
+    if (nestedMatch) {
+      return nestedMatch
+    }
+  }
+  return ""
+}
+
+function findFileRecursive(rootDir, targetName, depth) {
+  if (depth < 0) {
+    return ""
+  }
+  try {
+    const entries = fs.readdirSync(rootDir, { withFileTypes: true })
+    for (const entry of entries) {
+      const fullPath = path.join(rootDir, entry.name)
+      if (entry.isFile() && entry.name === targetName) {
+        return fullPath
+      }
+      if (entry.isDirectory()) {
+        const nested = findFileRecursive(fullPath, targetName, depth - 1)
+        if (nested) {
+          return nested
+        }
+      }
+    }
+  } catch {
+    return ""
+  }
+  return ""
 }
 
 function normalizeThreadId(value) {

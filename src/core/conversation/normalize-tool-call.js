@@ -22,6 +22,7 @@ function extractCanonicalToolCall({
   const outputText = extractTextPayload(subject?.output ?? subject?.result ?? subject?.content ?? "")
   const command = normalizeText(args.command || subject?.command)
   const patchText = normalizeText(args.input || args.patch || subject?.input || subject?.output)
+  const shellCommandInfo = extractShellCommandInfo(command)
   const displayInfo = normalizeDisplayPath({
     path: firstText(
       args.displayPath,
@@ -30,12 +31,13 @@ function extractCanonicalToolCall({
       args.file_path,
       args.path,
       extractPatchPath(patchText),
+      shellCommandInfo.path,
       extractCommandTailPath(command)
     ),
     workspaceRoot: subject?.workspaceRoot || mappedEvent?.payload?.workspaceRoot || raw?.cwd || "",
     stateDir: subject?.stateDir || "",
   })
-  const pattern = normalizeText(args.pattern || args.query || args.q || args.search)
+  const pattern = normalizeText(args.pattern || args.query || args.q || args.search || shellCommandInfo.pattern)
   const operationKind = inferOperationKind({
     rawToolName,
     toolName,
@@ -58,6 +60,7 @@ function extractCanonicalToolCall({
     relativePath: displayInfo.relativePath,
     path: displayInfo.path,
     filePath: displayInfo.filePath,
+    shellCommandKind: shellCommandInfo.kind,
     reminderText: extractReminderText(args, outputText),
     stickerId: extractStickerId(args, outputText),
     primaryFilePath: extractFilePath(args, outputText),
@@ -98,6 +101,9 @@ function buildOperationTextFromToolCall(toolCall = {}, { workspaceRoot = "", sta
     const target = [pattern, displayPath].filter(Boolean).join(" ")
     return `Grep ${target || toolName}`.trim()
   }
+  if (operationKind === "glob") {
+    return `Glob ${displayPath || toolName}`.trim()
+  }
   if (operationKind === "shell") {
     return `Bash ${truncateText(command || toolName, 180)}`.trim()
   }
@@ -121,11 +127,15 @@ function buildOperationTextFromToolCall(toolCall = {}, { workspaceRoot = "", sta
   if (operationKind === "web") {
     return `Use ${toolName || displayPath}`.trim()
   }
+  if (toolName) {
+    return `[${toolName}]`.trim()
+  }
   return `Use ${displayPath || toolName || "tool"}`.trim()
 }
 
 function inferOperationKind({ rawToolName = "", toolName = "", command = "", patchText = "" } = {}) {
   const combined = `${normalizeText(rawToolName)} ${normalizeText(toolName)}`.toLowerCase()
+  const shellKind = inferShellCommandKind(command, patchText)
   if (combined.includes("cyberboss_channel_send_file")) {
     return "send_file"
   }
@@ -135,34 +145,66 @@ function inferOperationKind({ rawToolName = "", toolName = "", command = "", pat
   if (combined.includes("cyberboss_reminder_create")) {
     return "reminder"
   }
+  if (combined.includes("apply_patch") || combined.includes("patch_apply_end") || extractPatchPath(patchText)) {
+    return "edit"
+  }
+  if (/^(?:read|get-content|cat|type)$/iu.test(toolName)) {
+    return "read"
+  }
+  if (/^(?:write|set-content|out-file|add-content)$/iu.test(toolName)) {
+    return "write"
+  }
+  if (/^(?:edit|multiedit)$/iu.test(toolName)) {
+    return "edit"
+  }
+  if (/^(?:grep)$/iu.test(toolName)) {
+    return "grep"
+  }
+  if (/^(?:glob)$/iu.test(toolName)) {
+    return "glob"
+  }
   if (combined.includes("shell_command") || combined === "bash") {
-    return "shell"
+    return shellKind
   }
   if (combined.includes("grep")) {
     return "grep"
   }
-  if (combined.includes("apply_patch") || combined.includes("patch_apply_end") || extractPatchPath(patchText)) {
-    return "edit"
-  }
-  if (/^(?:read|get-content|cat)$/iu.test(toolName)) {
-    return "read"
-  }
-  if (/^(?:write)$/iu.test(toolName)) {
-    return "write"
-  }
-  if (/^(?:edit)$/iu.test(toolName)) {
-    return "edit"
-  }
-  if (normalizeText(rawToolName).startsWith("mcp__")) {
+  if (normalizeText(rawToolName).startsWith("mcp__") || /^cyberboss_/iu.test(toolName)) {
     return "mcp"
   }
   if (command) {
-    return "shell"
+    return shellKind
   }
   if (combined.includes("web")) {
     return "web"
   }
   return "other"
+}
+
+function inferShellCommandKind(command = "", patchText = "") {
+  const normalized = normalizeText(command).toLowerCase()
+  if (!normalized && patchText) {
+    return "edit"
+  }
+  if (!normalized) {
+    return "shell"
+  }
+  if (normalized.includes("apply_patch") || normalized.includes("patch_apply")) {
+    return "edit"
+  }
+  if (/\b(?:rg|grep|select-string)\b/u.test(normalized)) {
+    return "grep"
+  }
+  if (/\b(?:get-childitem|ls|dir|glob)\b/u.test(normalized)) {
+    return "glob"
+  }
+  if (/\b(?:get-content|cat|type)\b/u.test(normalized)) {
+    return "read"
+  }
+  if (/\b(?:set-content|out-file|add-content)\b/u.test(normalized)) {
+    return "write"
+  }
+  return "shell"
 }
 
 function parseStructuredValue(value) {
@@ -340,13 +382,45 @@ function extractPatchPath(patchText = "") {
   return match?.[1] ? normalizeSlashPath(match[1].trim()) : ""
 }
 
+function extractShellCommandInfo(command = "") {
+  const normalized = normalizeText(command)
+  return {
+    kind: inferShellCommandKind(normalized),
+    path: extractCommandTailPath(normalized),
+    pattern: extractCommandPattern(normalized),
+  }
+}
+
 function extractCommandTailPath(command = "") {
   const normalized = normalizeText(command)
   if (!normalized) {
     return ""
   }
-  const matches = normalized.match(/([A-Za-z]:\\[^\s"']+|[A-Za-z]:\/[^\s"']+|(?:diary|inbox|src|stickers)\/[^\s"']+|(?:diary|inbox|src|stickers)\\[^\s"']+)/gu)
-  return matches?.length ? normalizeSlashPath(matches[matches.length - 1]) : ""
+  const tokens = [
+    ...extractQuotedTokens(normalized),
+    ...(normalized.match(/[A-Za-z]:[\\/][^\s"'|;]+/gu) || []),
+    ...(normalized.match(/(?:diary|inbox|src|stickers)[\\/][^\s"'|;]+/gu) || []),
+  ]
+    .map((entry) => normalizeSlashPath(entry))
+    .filter(Boolean)
+    .filter((entry) => !/\b(?:pwsh\.exe|powershell\.exe|cmd\.exe|node\.exe|npm\.cmd)\b/iu.test(entry))
+
+  return tokens.length ? tokens[tokens.length - 1] : ""
+}
+
+function extractCommandPattern(command = "") {
+  const normalized = normalizeText(command)
+  if (!normalized) {
+    return ""
+  }
+
+  const selectStringMatch = normalized.match(/-Pattern\s+(['"])(.*?)\1/iu)
+  if (selectStringMatch?.[2]) {
+    return normalizeText(selectStringMatch[2])
+  }
+
+  const quoted = extractQuotedTokens(normalized).filter((token) => !looksLikePathToken(token))
+  return quoted[0] ? normalizeText(quoted[0]) : ""
 }
 
 function extractFilePathFromText(text = "") {
@@ -357,6 +431,21 @@ function extractFilePathFromText(text = "") {
   }
   const anyPath = normalized.match(/[A-Za-z]:[\\/][^\r\n"]+/u)
   return anyPath?.[0] ? normalizeSlashPath(anyPath[0].trim()) : ""
+}
+
+function extractQuotedTokens(command = "") {
+  const tokens = []
+  for (const match of String(command || "").matchAll(/(['"])(.*?)\1/gu)) {
+    if (match[2]) {
+      tokens.push(match[2])
+    }
+  }
+  return tokens
+}
+
+function looksLikePathToken(value = "") {
+  const normalized = normalizeSlashPath(value)
+  return /^[A-Za-z]:\//u.test(normalized) || /^(?:diary|inbox|src|stickers)\//u.test(normalized)
 }
 
 function firstObject(...values) {
@@ -398,6 +487,7 @@ module.exports = {
   extractStickerId,
   extractTextPayload,
   inferOperationKind,
+  inferShellCommandKind,
   normalizeToolName,
   parseStructuredValue,
 }

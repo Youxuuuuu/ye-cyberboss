@@ -144,6 +144,9 @@ function looksSyntheticCodexContext(text = "") {
   return normalized.startsWith("<environment_context>")
     || normalized.startsWith("<permissions instructions>")
     || normalized.startsWith("The following is the Codex agent history")
+    || normalized.startsWith("Saved attachments:")
+    || normalized.startsWith("Visual context:")
+    || normalized.startsWith("Visual context from attachments:")
     || normalized.includes(">>> TRANSCRIPT START")
     || normalized.includes(">>> TRANSCRIPT DELTA START")
 }

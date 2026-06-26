@@ -8,6 +8,7 @@ const {
   ConversationArchive,
   ConversationImporter,
 } = require("../src/core/conversation")
+const { ConversationSourceLineResolver } = require("../src/core/conversation/source-line-resolver")
 
 const WORKSPACE_ROOT = "D:\\study\\cyberboss"
 
@@ -177,6 +178,7 @@ test("codex realtime tails raw session lines, uses real source lines, and dedupe
     messageId: "wx-1",
     text: "hello realtime",
     receivedAt: "2026-06-18T01:00:00.000Z",
+    attachments: [{ path: inboxFile, kind: "image", fileName: "attachment.png" }],
   }, {
     runtimeId: "codex",
     threadId: "codex-rt-1",
@@ -230,6 +232,10 @@ test("codex realtime tails raw session lines, uses real source lines, and dedupe
   assert.equal(dayRecords.filter((record) => record.type === "user" && record.text === "hello realtime").length, 1)
   assert.ok(dayRecords.some((record) => record.type === "operation" && record.text === "[cyberboss_channel_send_file] attachment.png"))
   assert.ok(dayRecords.some((record) => record.type === "assistant" && record.text === "codex realtime reply"))
+  const userRecord = dayRecords.find((record) => record.type === "user" && record.text === "hello realtime")
+  assert.equal(userRecord.source.sourceLine, 3)
+  assert.equal(userRecord.meta.attachments.length, 1)
+  assert.equal(userRecord.meta.attachments[0].relativePath, "inbox/2026-06-23/attachment.png")
 
   const operation = dayRecords.find((record) => record.type === "operation" && record.meta.toolName === "cyberboss_channel_send_file")
   const media = dayRecords.find((record) => record.type === "assistant" && record.text === "Sent file attachment.png")
@@ -301,6 +307,120 @@ test("claudecode realtime tails transcript once and merges tool_use plus tool_re
 
   const visible = dayRecords.find((record) => record.type === "assistant" && record.text === "Sent file attachment.png")
   assert.equal(visible.source.sourceLine, 3)
+})
+
+test("codex import extracts saved attachments into canonical user media without duplicate user rows", () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-codex-media-"))
+  const sourceFile = path.join(stateDir, "codex-media.jsonl")
+  const imageFile = path.join(stateDir, "inbox", "2026-06-25", "attachment-2.png")
+  const textFile = path.join(stateDir, "inbox", "2026-06-25", "小诗.txt")
+  const stickerFile = path.join(stateDir, "stickers", "assets", "stk_025.gif")
+  fs.mkdirSync(path.dirname(imageFile), { recursive: true })
+  fs.mkdirSync(path.dirname(textFile), { recursive: true })
+  fs.mkdirSync(path.dirname(stickerFile), { recursive: true })
+  fs.writeFileSync(imageFile, "png", "utf8")
+  fs.writeFileSync(textFile, "txt", "utf8")
+  fs.writeFileSync(stickerFile, "gif", "utf8")
+
+  writeJsonlFixture(sourceFile, [
+    sessionMeta("codex-media-1", "2026-06-25T21:52:04.700Z"),
+    turnContext("turn-media-1", "2026-06-25T21:52:04.710Z"),
+    eventUser("看这个", "2026-06-25T21:52:04.720Z"),
+    responseUser([
+      "[2026-06-26 05:52]",
+      "",
+      "Saved attachments:",
+      `- [image] ${imageFile}`,
+      `- [file] ${textFile}`,
+      `- [sticker] ${stickerFile}`,
+      "Use the saved local files if they are needed for the request.",
+      "",
+      "Visual context from attachments:",
+      `- ${imageFile}: a cute image`,
+    ].join("\n"), "2026-06-25T21:52:04.730Z"),
+  ])
+
+  const importer = new ConversationImporter({
+    config: {
+      conversationDir: path.join(stateDir, "conversations"),
+      stateDir,
+    },
+    logger: { warn() {} },
+  })
+
+  importer.importFile({
+    runtimeId: "codex",
+    sourceFile,
+    workspaceRoot: WORKSPACE_ROOT,
+  })
+
+  const dayRecords = readConversationDay(stateDir, "2026-06-26")
+  const userRecords = dayRecords.filter((record) => record.type === "user")
+  assert.equal(userRecords.length, 1)
+  assert.equal(userRecords[0].text, "看这个")
+  assert.equal(userRecords[0].meta.attachments.length, 2)
+  assert.equal(userRecords[0].meta.files.length, 1)
+  assert.equal(userRecords[0].meta.stickers.length, 1)
+  assert.equal(userRecords[0].meta.attachments[0].relativePath, "inbox/2026-06-25/attachment-2.png")
+  assert.equal(userRecords[0].meta.files[0].relativePath, "inbox/2026-06-25/小诗.txt")
+  assert.equal(userRecords[0].meta.stickers[0].relativePath, "stickers/assets/stk_025.gif")
+})
+
+test("shell command operations classify grep glob read write edit with short paths", () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-shell-kinds-"))
+  const sourceFile = path.join(stateDir, "codex-shells.jsonl")
+
+  writeJsonlFixture(sourceFile, [
+    sessionMeta("codex-shell-1"),
+    turnContext("turn-shell-1"),
+    responseFunctionCall("shell_command", { command: `Get-ChildItem -Force ${path.join(stateDir, "inbox", "2026-06-23")}` }, "call-glob-1"),
+    responseFunctionCall("shell_command", { command: `rg -n "经期" "${path.join(stateDir, "diary", "2026-06-22.md")}"` }, "call-grep-1"),
+    responseFunctionCall("shell_command", { command: `Get-Content "${path.join(stateDir, "diary", "2026-06-22.md")}" -Raw` }, "call-read-1"),
+    responseFunctionCall("shell_command", { command: `Set-Content "${path.join(stateDir, "inbox", "2026-06-23", "小诗.txt")}" "hi"` }, "call-write-1"),
+    responseFunctionCall("apply_patch", { input: "*** Begin Patch\n*** Update File: src/core/conversation/normalize-operation.js\n*** End Patch\n" }, "call-edit-1"),
+  ])
+
+  const importer = new ConversationImporter({
+    config: {
+      conversationDir: path.join(stateDir, "conversations"),
+      stateDir,
+    },
+    logger: { warn() {} },
+  })
+
+  importer.importFile({
+    runtimeId: "codex",
+    sourceFile,
+    workspaceRoot: WORKSPACE_ROOT,
+  })
+
+  const dayRecords = readConversationDay(stateDir, "2026-06-14")
+  assert.ok(dayRecords.some((record) => record.type === "operation" && record.text === "Glob inbox/2026-06-23"))
+  assert.ok(dayRecords.some((record) => record.type === "operation" && record.text === "Grep 经期 diary/2026-06-22.md"))
+  assert.ok(dayRecords.some((record) => record.type === "operation" && record.text === "Read diary/2026-06-22.md"))
+  assert.ok(dayRecords.some((record) => record.type === "operation" && record.text === "Write inbox/2026-06-23/小诗.txt"))
+  assert.ok(dayRecords.some((record) => record.type === "operation" && record.text === "Edit src/core/conversation/normalize-operation.js"))
+})
+
+test("claude source resolver supports Windows project variants and sessionId fallback", () => {
+  const claudeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-claude-paths-"))
+  const projectsDir = path.join(claudeRoot, "projects")
+  const projectDir = path.join(projectsDir, "D--study-cyberboss")
+  fs.mkdirSync(projectDir, { recursive: true })
+  const transcriptFile = path.join(projectDir, "claude-session-1.jsonl")
+  fs.writeFileSync(transcriptFile, "", "utf8")
+
+  const resolver = new ConversationSourceLineResolver({
+    claudeConfigDir: claudeRoot,
+  })
+
+  const resolved = resolver.resolveSourceFile({
+    runtimeId: "claudecode",
+    threadId: "claude-session-1",
+    workspaceRoot: "D:\\study\\cyberboss",
+  })
+
+  assert.equal(resolved, transcriptFile)
 })
 
 test("realtime and import produce matching source keys and visible media for the same codex raw lines", () => {

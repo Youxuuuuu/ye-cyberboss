@@ -14,7 +14,13 @@ function normalizeDisplayPath({ path: inputPath = "", workspaceRoot = "", stateD
 
   const absolutePath = looksAbsolutePath(normalizedInput) ? normalizedInput : ""
   const normalizedWorkspaceRoot = normalizeRootPath(workspaceRoot)
-  const normalizedStateDir = normalizeRootPath(stateDir || process.env.CYBERBOSS_STATE_DIR || path.join(os.homedir(), ".cyberboss"))
+  const inferredStateDir = inferStateDirFromAbsolutePath(absolutePath)
+  const normalizedStateDir = normalizeRootPath(
+    stateDir
+    || process.env.CYBERBOSS_STATE_DIR
+    || inferredStateDir
+    || path.join(os.homedir(), ".cyberboss")
+  )
 
   let relativePath = ""
   if (absolutePath && normalizedStateDir && isPathWithinRoot(absolutePath, normalizedStateDir)) {
@@ -52,6 +58,21 @@ function isPathWithinRoot(targetPath = "", rootPath = "") {
   const normalizedRoot = normalizeRootPath(rootPath).toLowerCase()
   return Boolean(normalizedTarget && normalizedRoot)
     && (normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}/`))
+}
+
+function inferStateDirFromAbsolutePath(absolutePath = "") {
+  const normalized = normalizeSlashPath(absolutePath)
+  if (!normalized) {
+    return ""
+  }
+  const marker = normalized.toLowerCase().indexOf("/.cyberboss/")
+  if (marker >= 0) {
+    return normalized.slice(0, marker + "/.cyberboss".length)
+  }
+  if (normalized.toLowerCase().endsWith("/.cyberboss")) {
+    return normalized
+  }
+  return ""
 }
 
 module.exports = {

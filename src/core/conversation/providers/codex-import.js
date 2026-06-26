@@ -3,6 +3,8 @@ const {
   buildToolResultMeta,
   buildVisibleAssistantRecordFromToolCall,
 } = require("../normalize-operation")
+const { extractSavedAttachmentsFromText } = require("../extract-saved-attachments")
+const { normalizeMediaList } = require("../normalize-media")
 const { buildConversationUserRecord, isApprovalReply } = require("../normalize-prompt")
 const { normalizeConversationRecord } = require("../normalize-record")
 const { normalizeToolName, parseStructuredValue } = require("../normalize-tool-call")
@@ -17,6 +19,7 @@ class CodexImportParser {
     this.currentWorkspaceRoot = ""
     this.pendingOperations = new Map()
     this.seenFallbackMessages = new Set()
+    this.lastCanonicalUserByTurn = new Map()
   }
 
   parseRaw({ raw, workspaceRoot = "", sourceFile = "", sourceLine = 0, fallbackTimestamp = "" }) {
@@ -60,6 +63,21 @@ class CodexImportParser {
     if (payloadType === "task_complete") {
       return []
     }
+    if (payloadType === "patch_apply_end") {
+      const operationRecord = this.buildOperationRecord({
+        timestamp: normalizeTimestamp(raw.timestamp, fallbackTimestamp),
+        payload: {
+          ...raw.payload,
+          type: "patch_apply_end",
+          input: JSON.stringify({
+            path: Object.keys(raw?.payload?.changes || {})[0] || "",
+          }),
+        },
+        sourceFile,
+        sourceLine,
+      })
+      return operationRecord ? [operationRecord] : []
+    }
     if (payloadType === "user_message" || payloadType === "agent_message") {
       const role = payloadType === "user_message" ? "user" : "assistant"
       const text = normalizeText(raw?.payload?.message)
@@ -72,13 +90,9 @@ class CodexImportParser {
       }
       this.seenFallbackMessages.add(messageKey)
       if (role === "user") {
-        const record = buildConversationUserRecord({
+        const record = this.buildUserRecord({
           text,
           timestamp: normalizeTimestamp(raw.timestamp, fallbackTimestamp),
-          runtimeId: "codex",
-          threadId: this.currentThreadId,
-          turnId: this.currentTurnId,
-          workspaceRoot: this.currentWorkspaceRoot,
           source: {
             provider: "codex",
             sourceFile,
@@ -134,13 +148,9 @@ class CodexImportParser {
       }
       this.seenFallbackMessages.add(messageKey)
       if (role === "user") {
-        const record = buildConversationUserRecord({
+        const record = this.buildUserRecord({
           text,
           timestamp,
-          runtimeId: "codex",
-          threadId: this.currentThreadId,
-          turnId: this.currentTurnId,
-          workspaceRoot: this.currentWorkspaceRoot,
           source: {
             provider: "codex",
             sourceFile,
@@ -247,12 +257,14 @@ class CodexImportParser {
 
   buildOperationRecord({ timestamp, payload, sourceFile, sourceLine }) {
     const callId = normalizeText(payload.call_id)
-    const toolName = normalizeToolName(payload.name || payload.type)
+    const rawToolName = normalizeText(payload.name || payload.type)
+    const toolName = normalizeToolName(rawToolName)
     const args = parseStructuredValue(payload.arguments || payload.input || payload.output)
     const descriptor = buildOperationDescriptor({
       runtimeId: "codex",
       mode: this.mode,
       toolName,
+      rawToolName,
       args,
       fallbackText: typeof payload.input === "string" ? payload.input : "",
       workspaceRoot: this.currentWorkspaceRoot,
@@ -281,6 +293,63 @@ class CodexImportParser {
       _operationArgs: args,
     })
   }
+
+  buildUserRecord({
+    text = "",
+    timestamp = "",
+    source = {},
+    defaultSourceType = "",
+    systemCompactSourceType = "",
+  } = {}) {
+    const extracted = extractSavedAttachmentsFromText(text, {
+      workspaceRoot: this.currentWorkspaceRoot,
+      stateDir: this.stateDir,
+    })
+    const record = buildConversationUserRecord({
+      text: extracted.text,
+      timestamp,
+      runtimeId: "codex",
+      threadId: this.currentThreadId,
+      turnId: this.currentTurnId,
+      workspaceRoot: this.currentWorkspaceRoot,
+      meta: buildUserMeta(extracted),
+      source,
+      defaultSourceType,
+      systemCompactSourceType,
+    })
+    return this.rememberCanonicalUserRecord(record)
+  }
+
+  rememberCanonicalUserRecord(record) {
+    if (!record || record.type !== "user") {
+      return record
+    }
+    const key = buildTurnKey(record.threadId, record.turnId)
+    if (key && !record.text && hasMedia(record.meta)) {
+      const existing = this.lastCanonicalUserByTurn.get(key)
+      if (existing) {
+        return normalizeConversationRecord({
+          type: "user",
+          timestamp: record.timestamp,
+          runtimeId: existing.runtimeId,
+          threadId: existing.threadId,
+          turnId: existing.turnId,
+          workspaceRoot: existing.workspaceRoot,
+          text: "",
+          meta: {
+            attachments: mergeMedia(existing.meta.attachments, record.meta.attachments),
+            files: mergeMedia(existing.meta.files, record.meta.files),
+            stickers: mergeMedia(existing.meta.stickers, record.meta.stickers),
+          },
+          source: existing.source,
+        })
+      }
+    }
+    if (key && !isSystemCompact(record)) {
+      this.lastCanonicalUserByTurn.set(key, snapshotUserRecord(record))
+    }
+    return record
+  }
 }
 
 function createCodexImportParser(options = {}) {
@@ -303,6 +372,63 @@ function extractCodexMessageText(content) {
     .filter(Boolean)
     .join("\n")
     .trim()
+}
+
+function buildUserMeta(extracted = {}) {
+  const normalizedAttachments = normalizeMediaList(extracted.visibleAttachments || extracted.attachments)
+  const normalizedFiles = normalizeMediaList(extracted.files)
+  const normalizedStickers = normalizeMediaList(extracted.stickers)
+  return {
+    attachments: normalizedAttachments,
+    files: normalizedFiles,
+    stickers: normalizedStickers,
+  }
+}
+
+function buildTurnKey(threadId, turnId) {
+  const normalizedThreadId = normalizeText(threadId)
+  const normalizedTurnId = normalizeText(turnId)
+  return normalizedThreadId && normalizedTurnId ? `${normalizedThreadId}|${normalizedTurnId}` : ""
+}
+
+function hasMedia(meta = {}) {
+  return Array.isArray(meta?.attachments) && meta.attachments.length > 0
+}
+
+function isSystemCompact(record) {
+  return normalizeText(record?.meta?.visibleAs) === "system_compact"
+}
+
+function snapshotUserRecord(record) {
+  return {
+    runtimeId: record.runtimeId,
+    threadId: record.threadId,
+    turnId: record.turnId,
+    workspaceRoot: record.workspaceRoot,
+    meta: {
+      attachments: record.meta.attachments,
+      files: record.meta.files,
+      stickers: record.meta.stickers,
+    },
+    source: {
+      ...record.source,
+    },
+  }
+}
+
+function mergeMedia(left = [], right = []) {
+  const items = [...(Array.isArray(left) ? left : []), ...(Array.isArray(right) ? right : [])]
+  const result = []
+  const seen = new Set()
+  for (const item of items) {
+    const signature = JSON.stringify(item)
+    if (seen.has(signature)) {
+      continue
+    }
+    seen.add(signature)
+    result.push(item)
+  }
+  return result
 }
 
 function normalizeText(value) {
