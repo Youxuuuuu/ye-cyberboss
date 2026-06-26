@@ -60,9 +60,7 @@ class ConversationArchive {
       files: attachments.filter((item) => item.kind === "file"),
       stickers: attachments.filter((item) => item.kind === "sticker"),
       messageId: normalizeText(prepared.messageId),
-      provider: prepared.provider === "weixin" ? "weixin" : "import",
       receivedAt: prepared.receivedAt || new Date().toISOString(),
-      rawId: normalizeText(prepared.messageId) || buildInboundRawId(prepared),
     }
     this.pendingInboundUserRecords.push(entry)
     return { writtenCount: 0, warnings: [] }
@@ -206,15 +204,11 @@ class ConversationArchive {
     if (record?.type !== "user") {
       return false
     }
-    const sourceProvider = normalizeText(record?.source?.provider)
     if (normalizeText(record?.meta?.visibleAs) === "system_compact") {
       return false
     }
     if (!normalizeText(record.text) && hasMedia(record.meta) && this.hasRecentCanonicalRealtimeUser(record)) {
       return true
-    }
-    if (sourceProvider !== "codex" && sourceProvider !== "claudecode") {
-      return false
     }
     return false
   }
@@ -287,42 +281,8 @@ class ConversationArchive {
     }
     this.pendingInboundUserRecords = this.pendingInboundUserRecords.filter((entry) => {
       const receivedAtMs = Date.parse(entry?.receivedAt || "")
-      const keep = Number.isFinite(receivedAtMs) && (now - receivedAtMs) < this.pendingInboundTtlMs
-      if (!keep && entry?.timer) {
-        clearTimeout(entry.timer)
-      }
-      return keep
+      return Number.isFinite(receivedAtMs) && (now - receivedAtMs) < this.pendingInboundTtlMs
     })
-  }
-
-  scheduleInboundFallback(entry) {
-    const timer = setTimeout(() => {
-      try {
-        const fallbackRecord = this.consumePendingInboundAsFallback(entry.id)
-        if (fallbackRecord) {
-          this.updateLastTimestamp([fallbackRecord])
-          this.writer.writeRecords([fallbackRecord])
-        }
-      } catch {
-        // leave the pending entry for the next runtime drain if fallback writing fails
-      }
-    }, this.inboundFallbackDelayMs)
-    timer.unref?.()
-    entry.timer = timer
-  }
-
-  collectReadyInboundFallbackRecords() {
-    const now = Date.now()
-    const ready = this.pendingInboundUserRecords
-      .filter((entry) => now - Date.parse(entry.receivedAt) >= this.inboundFallbackDelayMs)
-      .map((entry) => this.consumePendingInboundAsFallback(entry.id))
-      .filter(Boolean)
-    return ready
-  }
-
-  consumePendingInboundAsFallback(id) {
-    const entry = this.consumePendingInbound(id)
-    return entry ? this.buildInboundFallbackRecord(entry) : null
   }
 
   consumePendingInbound(id) {
@@ -331,35 +291,7 @@ class ConversationArchive {
       return null
     }
     const [entry] = this.pendingInboundUserRecords.splice(index, 1)
-    if (entry?.timer) {
-      clearTimeout(entry.timer)
-    }
     return entry
-  }
-
-  buildInboundFallbackRecord(entry) {
-    return normalizeConversationRecord({
-      type: "user",
-      timestamp: entry.receivedAt,
-      runtimeId: entry.runtimeId,
-      threadId: entry.threadId,
-      turnId: entry.turnId,
-      workspaceRoot: entry.workspaceRoot,
-      text: entry.text,
-      meta: {
-        ...(entry.quote ? { quote: entry.quote } : {}),
-        ...(entry.messageId ? { messageId: entry.messageId } : {}),
-        attachments: entry.attachments,
-        files: entry.files,
-        stickers: entry.stickers,
-        runtimeId: entry.runtimeId,
-      },
-      source: {
-        provider: entry.provider,
-        sourceType: "weixin.inbound",
-        rawId: entry.rawId,
-      },
-    })
   }
 
   hasRecentCanonicalRealtimeUser(record) {
