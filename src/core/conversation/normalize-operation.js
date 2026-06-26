@@ -1,48 +1,55 @@
 const path = require("path")
 
+const { normalizeDisplayPath } = require("./normalize-display-path")
 const { normalizeMediaItem } = require("./normalize-media")
+const {
+  buildOperationTextFromToolCall,
+  extractCanonicalToolCall,
+} = require("./normalize-tool-call")
 const { truncateText } = require("./normalize-time")
 
-function buildOperationDescriptor({ toolName = "", args = {}, fallbackText = "" } = {}) {
-  const normalizedToolName = normalizeText(toolName)
-  const shortToolName = normalizeToolLabel(normalizedToolName)
-  const patchPath = extractPatchPath(args.input || args.patch || "")
-  const displayPath = normalizeText(
-    args.displayPath
-    || args.display_path
-    || args.filePath
-    || args.file_path
-    || args.path
-    || patchPath
-    || extractCommandPath(args.command || "")
-  )
-  const pattern = normalizeText(args.pattern || args.query || args.q)
-  const command = normalizeText(args.command)
-  const operationKind = inferOperationKind({
-    toolName: normalizedToolName,
-    shortToolName,
-    command,
-    displayPath,
+function buildOperationDescriptor({
+  runtimeId = "",
+  mode = "",
+  toolName = "",
+  args = {},
+  fallbackText = "",
+  outputText = "",
+  workspaceRoot = "",
+  stateDir = "",
+} = {}) {
+  const toolCall = extractCanonicalToolCall({
+    runtimeId,
+    mode,
+    payload: {
+      name: toolName,
+      input: args,
+      output: outputText || fallbackText,
+    },
   })
-  const text = buildOperationText({
-    operationKind,
-    shortToolName,
-    displayPath,
-    pattern,
-    command,
-    fallbackText,
+  const displayInfo = normalizeDisplayPath({
+    path: toolCall.path || toolCall.filePath || toolCall.displayPath,
+    workspaceRoot,
+    stateDir,
   })
+  const normalizedToolCall = {
+    ...toolCall,
+    displayPath: displayInfo.displayPath || toolCall.displayPath,
+    relativePath: displayInfo.relativePath || toolCall.relativePath,
+    path: displayInfo.path || toolCall.path,
+    filePath: displayInfo.filePath || toolCall.filePath,
+  }
 
   return {
-    text,
+    text: buildOperationTextFromToolCall(normalizedToolCall, { workspaceRoot, stateDir }),
     meta: removeEmptyFields({
-      toolName: normalizedToolName || shortToolName,
-      operationKind,
-      displayPath,
-      relativePath: toRelativeLikePath(displayPath),
-      path: displayPath,
-      pattern,
-      command,
+      toolName: normalizedToolCall.toolName || normalizeText(toolName),
+      operationKind: normalizedToolCall.operationKind,
+      displayPath: normalizedToolCall.displayPath,
+      relativePath: normalizedToolCall.relativePath,
+      path: normalizedToolCall.path,
+      pattern: normalizedToolCall.pattern,
+      command: normalizedToolCall.command,
     }),
   }
 }
@@ -52,61 +59,74 @@ function buildToolResultMeta(outputText = "") {
   if (!normalized) {
     return {}
   }
-  const summary = extractResultSummary(normalized)
   return removeEmptyFields({
-    resultSummary: summary,
+    resultSummary: extractResultSummary(normalized),
     toolResultPreview: truncateText(normalized, 280),
   })
 }
 
-function buildVisibleAssistantRecordFromResult({ toolName = "", outputText = "" } = {}) {
-  const kind = inferOperationKind({
-    toolName,
-    shortToolName: normalizeToolLabel(toolName),
-    command: "",
-    displayPath: "",
+function buildVisibleAssistantRecordFromToolCall({ toolName = "", args = {}, outputText = "", workspaceRoot = "", stateDir = "" } = {}) {
+  const descriptor = extractCanonicalToolCall({
+    payload: {
+      name: toolName,
+      input: args,
+      output: outputText,
+    },
   })
-  const parsed = parseStructuredToolResult(outputText)
-  const fallbackText = extractResultSummary(outputText)
+  const displayInfo = normalizeDisplayPath({
+    path: descriptor.primaryFilePath || descriptor.filePath || descriptor.path,
+    workspaceRoot,
+    stateDir,
+  })
+  const filePath = displayInfo.filePath || descriptor.primaryFilePath
 
-  if (kind === "send_file") {
-    const filePath = normalizeText(parsed?.filePath || parsed?.path || extractPathFromResultText(outputText))
-    if (!filePath) {
-      return null
-    }
+  if (descriptor.operationKind === "send_file" && filePath) {
+    const fileName = path.basename(filePath)
+    const mediaKind = /\.(?:png|jpe?g|gif|webp|bmp|svg)$/iu.test(filePath) ? "image" : "file"
     const fileItem = normalizeMediaItem({
-      kind: "file",
+      kind: mediaKind,
+      fileName,
       path: filePath,
       filePath,
+      relativePath: displayInfo.relativePath,
+      isImage: mediaKind === "image",
     })
     return {
       type: "assistant",
-      text: `Sent file ${path.basename(filePath)}`,
+      variant: "visible",
+      text: `Sent file ${fileName}`,
       meta: {
-        files: [fileItem],
-        attachments: [fileItem],
+        attachments: mediaKind === "image" ? [fileItem] : [],
+        files: mediaKind === "file" ? [fileItem] : [],
+        stickers: [],
       },
     }
   }
 
-  if (kind === "send_sticker") {
-    const stickerId = normalizeText(parsed?.stickerId || extractStickerIdFromResultText(outputText))
-    if (!stickerId) {
-      return null
-    }
-    const filePath = normalizeText(parsed?.filePath || parsed?.path)
+  if (descriptor.operationKind === "send_sticker" && descriptor.stickerId) {
+    const stickerFilePath = filePath || `${descriptor.stickerId}.gif`
+    const stickerDisplay = normalizeDisplayPath({
+      path: stickerFilePath,
+      workspaceRoot,
+      stateDir,
+    })
     const stickerItem = normalizeMediaItem({
       kind: "sticker",
-      stickerId,
-      path: filePath,
-      filePath,
+      stickerId: descriptor.stickerId,
+      fileName: path.basename(stickerDisplay.filePath || stickerFilePath),
+      path: stickerDisplay.filePath || stickerFilePath,
+      filePath: stickerDisplay.filePath || stickerFilePath,
+      relativePath: stickerDisplay.relativePath,
+      isImage: true,
     })
     return {
       type: "assistant",
-      text: fallbackText || `Sent sticker ${stickerId}`,
+      variant: "visible",
+      text: `Sent sticker ${descriptor.stickerId}`,
       meta: {
         attachments: [stickerItem],
         stickers: [stickerItem],
+        files: [],
       },
     }
   }
@@ -114,111 +134,46 @@ function buildVisibleAssistantRecordFromResult({ toolName = "", outputText = "" 
   return null
 }
 
-function inferOperationKind({ toolName = "", shortToolName = "", command = "", displayPath = "" } = {}) {
-  const tool = `${normalizeText(toolName)} ${normalizeText(shortToolName)}`.toLowerCase()
-  if (tool.includes("cyberboss_channel_send_file")) {
-    return "send_file"
-  }
-  if (tool.includes("cyberboss_sticker_send")) {
-    return "send_sticker"
-  }
-  if (tool.includes("apply_patch") || tool.includes("edit") || tool.includes("patch")) {
-    return "edit"
-  }
-  if (tool.includes("write")) {
-    return "write"
-  }
-  if (tool.includes("read")) {
-    return "read"
-  }
-  if (tool.includes("search") || tool.includes("find") || tool.includes("grep") || tool.includes("rg")) {
-    return "search"
-  }
-  if (normalizeText(command)) {
-    return "shell"
-  }
-  if (normalizeText(toolName).startsWith("mcp__")) {
-    return "mcp"
-  }
-  if (tool.includes("web")) {
-    return "web"
-  }
-  if (displayPath) {
-    return "other"
-  }
-  return "other"
+function buildVisibleAssistantRecordFromResult({ toolName = "", args = {}, outputText = "", workspaceRoot = "", stateDir = "" } = {}) {
+  return buildVisibleAssistantRecordFromToolCall({
+    toolName,
+    args,
+    outputText,
+    workspaceRoot,
+    stateDir,
+  })
 }
 
-function buildOperationText({ operationKind, shortToolName, displayPath, pattern, command, fallbackText }) {
-  if (operationKind === "read") {
-    return `Read ${displayPath || pattern || shortToolName}`.trim()
-  }
-  if (operationKind === "write") {
-    return `Write ${displayPath || shortToolName}`.trim()
-  }
-  if (operationKind === "edit") {
-    return `Edit ${displayPath || shortToolName}`.trim()
-  }
-  if (operationKind === "search") {
-    return `Search ${pattern || displayPath || truncateText(command, 120) || shortToolName}`.trim()
-  }
-  if (operationKind === "shell") {
-    return `Run ${truncateText(command || fallbackText || shortToolName, 120)}`.trim()
-  }
-  if (operationKind === "send_file") {
-    return `Send file ${displayPath ? path.basename(displayPath) : shortToolName}`.trim()
-  }
-  if (operationKind === "send_sticker") {
-    return `Send sticker ${shortToolName}`.trim()
-  }
-  if (operationKind === "mcp") {
-    return shortToolName || displayPath || truncateText(fallbackText, 120)
-  }
-  return `Use ${displayPath || truncateText(fallbackText || shortToolName, 120)}`.trim()
+function inferOperationKind({ toolName = "", shortToolName = "", command = "", displayPath = "" } = {}) {
+  return extractCanonicalToolCall({
+    payload: {
+      name: toolName || shortToolName,
+      input: {
+        command,
+        path: displayPath,
+      },
+    },
+  }).operationKind
 }
 
 function parseStructuredToolResult(outputText = "") {
-  const normalized = String(outputText || "")
-  const jsonStart = normalized.indexOf("\n{")
-  if (jsonStart < 0) {
-    return null
-  }
-  try {
-    return JSON.parse(normalized.slice(jsonStart + 1).trim())
-  } catch {
-    return null
-  }
-}
-
-function extractPatchPath(patchText = "") {
-  const normalized = String(patchText || "")
-  const match = normalized.match(/\*\*\* (?:Update|Add|Delete) File: (.+)/u)
-  if (match?.[1]) {
-    return match[1].trim()
-  }
-  return ""
-}
-
-function extractCommandPath(command = "") {
-  const normalized = normalizeText(command)
+  const normalized = String(outputText || "").trim()
   if (!normalized) {
-    return ""
+    return null
   }
-  const match = normalized.match(/(?:Get-Content|type|cat|rg(?:\.exe)?\s+--files|rg(?:\.exe)?\s+-n)\s+("?[^"\n]+"?)/iu)
-  if (match?.[1]) {
-    return stripQuotes(match[1])
+  const candidates = [normalized]
+  const firstJson = normalized.search(/[\[{]/u)
+  if (firstJson > 0) {
+    candidates.push(normalized.slice(firstJson))
   }
-  return ""
-}
-
-function extractPathFromResultText(outputText = "") {
-  const match = String(outputText || "").match(/File sent:\s+([^\n]+)/u)
-  return match?.[1] ? match[1].trim() : ""
-}
-
-function extractStickerIdFromResultText(outputText = "") {
-  const match = String(outputText || "").match(/Sticker sent:\s+([^\n]+)/u)
-  return match?.[1] ? match[1].trim() : ""
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate)
+    } catch {
+      // continue
+    }
+  }
+  return null
 }
 
 function extractResultSummary(text = "") {
@@ -231,28 +186,8 @@ function extractResultSummary(text = "") {
     .filter((line) => !/^Wall time:/iu.test(line))
     .filter((line) => !/^Output:$/iu.test(line))
 
-  return truncateText(lines[0] || String(text || ""), 160)
-}
-
-function normalizeToolLabel(toolName = "") {
-  const normalized = normalizeText(toolName)
-  if (!normalized.startsWith("mcp__")) {
-    return normalized
-  }
-  const parts = normalized.split("__").filter(Boolean)
-  return parts[parts.length - 1] || normalized
-}
-
-function toRelativeLikePath(value = "") {
-  const normalized = normalizeText(value)
-  if (!normalized) {
-    return ""
-  }
-  return normalized.replace(/^[A-Za-z]:[\\/]/u, "").replace(/\\/g, "/")
-}
-
-function stripQuotes(value = "") {
-  return String(value || "").replace(/^"+|"+$/g, "")
+  const first = lines.find((line) => !/^[\[{]/u.test(line)) || lines[0] || String(text || "")
+  return truncateText(first, 160)
 }
 
 function removeEmptyFields(value) {
@@ -273,6 +208,7 @@ function normalizeText(value) {
 module.exports = {
   buildOperationDescriptor,
   buildToolResultMeta,
+  buildVisibleAssistantRecordFromToolCall,
   buildVisibleAssistantRecordFromResult,
   inferOperationKind,
   parseStructuredToolResult,

@@ -9,4 +9,4 @@ firmware/
 .codex/*
 tmp-*
 examples/mcp/
-docs/
+docs/*

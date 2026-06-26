@@ -23,24 +23,59 @@ function normalizeSource(source = {}, extra = {}) {
 }
 
 function buildSourceKey(source = {}, extra = {}) {
+  const provider = normalizeText(source.provider) || "source"
+  const recordType = normalizeText(extra.type)
+  const variant = normalizeText(extra.variant)
+  const mediaKind = firstMediaKind(extra.meta)
+
+  if (recordType === "operation" && normalizeText(source.callId)) {
+    return [provider, normalizeText(extra.threadId), normalizeText(extra.turnId), normalizeText(source.callId), "operation"]
+      .filter(Boolean)
+      .join("|")
+  }
+
+  if (variant === "visible" && normalizeText(source.callId)) {
+    return [provider, normalizeText(extra.threadId), normalizeText(extra.turnId), normalizeText(source.callId), "visible", mediaKind || "assistant"]
+      .filter(Boolean)
+      .join("|")
+  }
+
+  if (recordType === "user") {
+    return [provider, normalizeText(source.sourceFile), normalizePositiveInt(source.sourceLine), normalizeText(source.rawId), "user"]
+      .filter(Boolean)
+      .join("|")
+  }
+
+  if (recordType === "assistant" || recordType === "thinking") {
+    return [provider, normalizeText(source.sourceFile), normalizePositiveInt(source.sourceLine), normalizeText(source.rawId), recordType]
+      .filter(Boolean)
+      .join("|")
+  }
+
   const payload = [
-    normalizeText(source.provider),
-    normalizeText(source.sourceType),
+    provider,
     normalizeText(source.sourceFile),
     normalizePositiveInt(source.sourceLine),
     normalizeText(source.rawId),
     normalizeText(source.callId),
     normalizeText(source.uuid),
     normalizeText(source.parentUuid),
-    normalizeText(extra.runtimeId),
     normalizeText(extra.threadId),
     normalizeText(extra.turnId),
-    normalizeText(extra.type),
-    normalizeText(extra.variant),
+    recordType,
+    variant,
     normalizeText(extra.text),
   ].join("|")
 
-  return `${normalizeText(source.provider) || "source"}:${crypto.createHash("sha1").update(payload).digest("hex")}`
+  return `${provider}:${crypto.createHash("sha1").update(payload).digest("hex")}`
+}
+
+function firstMediaKind(meta = {}) {
+  const attachments = Array.isArray(meta?.attachments) ? meta.attachments : []
+  const files = Array.isArray(meta?.files) ? meta.files : []
+  const stickers = Array.isArray(meta?.stickers) ? meta.stickers : []
+  const first = attachments[0] || stickers[0] || files[0] || null
+  return normalizeText(first?.kind || first?.type)
 }
 
 function pickAllowedKeys(input, allowedKeys) {

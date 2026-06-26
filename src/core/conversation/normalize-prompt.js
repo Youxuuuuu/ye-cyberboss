@@ -32,6 +32,14 @@ function classifyConversationPromptVisibility(text, context = {}) {
     }
   }
 
+  if (looksSyntheticCodexContext(candidate)) {
+    return {
+      action: "drop",
+      systemKind: "",
+      displayText: "",
+    }
+  }
+
   return {
     action: "keep",
     systemKind: "",
@@ -129,6 +137,15 @@ function extractConversationQuote(text) {
 
 function isApprovalReply(text) {
   return /^\/(?:yes|always|no)\b/iu.test(normalizeText(text))
+}
+
+function looksSyntheticCodexContext(text = "") {
+  const normalized = normalizeText(text)
+  return normalized.startsWith("<environment_context>")
+    || normalized.startsWith("<permissions instructions>")
+    || normalized.startsWith("The following is the Codex agent history")
+    || normalized.includes(">>> TRANSCRIPT START")
+    || normalized.includes(">>> TRANSCRIPT DELTA START")
 }
 
 function normalizeText(value) {

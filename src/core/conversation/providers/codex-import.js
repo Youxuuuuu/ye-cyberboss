@@ -1,15 +1,17 @@
 const {
   buildOperationDescriptor,
   buildToolResultMeta,
-  buildVisibleAssistantRecordFromResult,
+  buildVisibleAssistantRecordFromToolCall,
 } = require("../normalize-operation")
 const { buildConversationUserRecord, isApprovalReply } = require("../normalize-prompt")
 const { normalizeConversationRecord } = require("../normalize-record")
+const { normalizeToolName, parseStructuredValue } = require("../normalize-tool-call")
 const { normalizeTimestamp } = require("../normalize-time")
 
 class CodexImportParser {
-  constructor({ mode = "import" } = {}) {
+  constructor({ mode = "import", stateDir = "" } = {}) {
     this.mode = mode
+    this.stateDir = stateDir
     this.currentThreadId = ""
     this.currentTurnId = ""
     this.currentWorkspaceRoot = ""
@@ -98,7 +100,7 @@ class CodexImportParser {
         text,
         source: {
           provider: "codex",
-          sourceType: `codex.${this.mode}.event_msg.${payloadType}`,
+          sourceType: `codex.${payloadType}`,
           sourceFile,
           sourceLine,
           rawId: `${payloadType}:${sourceLine}`,
@@ -160,7 +162,7 @@ class CodexImportParser {
         text,
         source: {
           provider: "codex",
-          sourceType: `codex.${this.mode}.response_item.message.${role}`,
+          sourceType: `codex.${role}`,
           sourceFile,
           sourceLine,
           rawId: `${role}:${sourceLine}`,
@@ -179,7 +181,10 @@ class CodexImportParser {
         return []
       }
       if (operationRecord.source.callId) {
-        this.pendingOperations.set(operationRecord.source.callId, operationRecord)
+        this.pendingOperations.set(operationRecord.source.callId, {
+          record: operationRecord,
+          args: operationRecord._operationArgs || {},
+        })
       }
       return [operationRecord]
     }
@@ -189,7 +194,8 @@ class CodexImportParser {
       if (!callId || !this.pendingOperations.has(callId)) {
         return []
       }
-      const existing = this.pendingOperations.get(callId)
+      const pending = this.pendingOperations.get(callId)
+      const existing = pending.record
       const outputText = normalizeText(payload.output)
       const updatedOperation = normalizeConversationRecord({
         ...existing,
@@ -199,12 +205,18 @@ class CodexImportParser {
           ...buildToolResultMeta(outputText),
         },
       })
-      this.pendingOperations.set(callId, updatedOperation)
+      this.pendingOperations.set(callId, {
+        ...pending,
+        record: updatedOperation,
+      })
 
       const records = [updatedOperation]
-      const visibleAssistant = buildVisibleAssistantRecordFromResult({
+      const visibleAssistant = buildVisibleAssistantRecordFromToolCall({
         toolName: updatedOperation?.meta?.toolName,
+        args: pending.args || {},
         outputText,
+        workspaceRoot: this.currentWorkspaceRoot,
+        stateDir: this.stateDir,
       })
       if (visibleAssistant) {
         records.push(normalizeConversationRecord({
@@ -219,7 +231,7 @@ class CodexImportParser {
           },
           source: {
             provider: "codex",
-            sourceType: `codex.${this.mode}.function_call_output.visible`,
+            sourceType: `codex.visible`,
             sourceFile,
             sourceLine,
             rawId: `visible:${sourceLine}`,
@@ -235,12 +247,16 @@ class CodexImportParser {
 
   buildOperationRecord({ timestamp, payload, sourceFile, sourceLine }) {
     const callId = normalizeText(payload.call_id)
-    const toolName = normalizeText(payload.name || payload.type)
-    const args = parseMaybeJson(payload.arguments || payload.input || payload.output)
+    const toolName = normalizeToolName(payload.name || payload.type)
+    const args = parseStructuredValue(payload.arguments || payload.input || payload.output)
     const descriptor = buildOperationDescriptor({
+      runtimeId: "codex",
+      mode: this.mode,
       toolName,
       args,
       fallbackText: typeof payload.input === "string" ? payload.input : "",
+      workspaceRoot: this.currentWorkspaceRoot,
+      stateDir: this.stateDir,
     })
     if (!descriptor.text) {
       return null
@@ -256,18 +272,19 @@ class CodexImportParser {
       meta: descriptor.meta,
       source: {
         provider: "codex",
-        sourceType: `codex.${this.mode}.${normalizeText(payload.type) || "operation"}`,
+        sourceType: "codex.operation",
         sourceFile,
         sourceLine,
         rawId: `${normalizeText(payload.type)}:${sourceLine}`,
         callId,
       },
+      _operationArgs: args,
     })
   }
 }
 
-function createCodexImportParser() {
-  return new CodexImportParser({ mode: "import" })
+function createCodexImportParser(options = {}) {
+  return new CodexImportParser(options)
 }
 
 function buildFallbackMessageKey(role, turnId, text) {
@@ -286,22 +303,6 @@ function extractCodexMessageText(content) {
     .filter(Boolean)
     .join("\n")
     .trim()
-}
-
-function parseMaybeJson(value) {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value
-  }
-  if (typeof value !== "string") {
-    return {}
-  }
-  try {
-    return JSON.parse(value)
-  } catch {
-    return {
-      input: value,
-    }
-  }
 }
 
 function normalizeText(value) {

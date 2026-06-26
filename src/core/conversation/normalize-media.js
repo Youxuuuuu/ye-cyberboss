@@ -1,6 +1,8 @@
 const path = require("path")
 
-function normalizeMediaItem(item = {}) {
+const { normalizeDisplayPath, normalizeSlashPath } = require("./normalize-display-path")
+
+function normalizeMediaItem(item = {}, context = {}) {
   const absolutePath = firstText(
     item.path,
     item.filePath,
@@ -9,15 +11,20 @@ function normalizeMediaItem(item = {}) {
     item.absolutePath,
     item.createdPath
   )
+  const displayPath = normalizeDisplayPath({
+    path: absolutePath || item.relativePath || "",
+    workspaceRoot: context.workspaceRoot,
+    stateDir: context.stateDir,
+  })
   const kind = normalizeMediaKind(item)
   const normalized = {
     label: normalizeText(item.label),
-    fileName: normalizeText(item.fileName) || basenameFromPath(absolutePath),
-    relativePath: normalizeText(item.relativePath),
-    path: absolutePath,
-    filePath: absolutePath,
-    localPath: absolutePath,
-    savedPath: absolutePath,
+    fileName: normalizeText(item.fileName) || basenameFromPath(absolutePath || item.relativePath),
+    relativePath: normalizeText(item.relativePath) || displayPath.relativePath,
+    path: normalizeSlashPath(absolutePath),
+    filePath: normalizeSlashPath(absolutePath),
+    localPath: normalizeSlashPath(absolutePath),
+    savedPath: normalizeSlashPath(absolutePath),
     url: normalizeText(item.url),
     mimeType: normalizeText(item.mimeType || item.contentType),
     contentType: normalizeText(item.contentType || item.mimeType),
@@ -31,10 +38,10 @@ function normalizeMediaItem(item = {}) {
   return removeEmptyFields(normalized)
 }
 
-function normalizeMediaList(items) {
+function normalizeMediaList(items, context = {}) {
   return Array.isArray(items)
     ? items
-      .map((item) => normalizeMediaItem(item))
+      .map((item) => normalizeMediaItem(item, context))
       .filter((item) => Object.keys(item).length > 0)
     : []
 }

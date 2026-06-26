@@ -1,10 +1,10 @@
-const path = require("path")
-
 const { normalizeConversationRecord } = require("./normalize-record")
 const { normalizeMediaList } = require("./normalize-media")
 const { ConversationWriter } = require("./writer")
-const { createClaudeCodeRealtimeParser } = require("./providers/claudecode-realtime")
-const { createCodexRealtimeParser } = require("./providers/codex-realtime")
+const { RealtimeTailer } = require("./realtime-tailer")
+const { ConversationSourceLineResolver } = require("./source-line-resolver")
+const { createClaudeCodeImportParser } = require("./providers/claudecode-import")
+const { createCodexImportParser } = require("./providers/codex-import")
 
 class ConversationArchive {
   constructor({ config, writer = null } = {}) {
@@ -14,7 +14,12 @@ class ConversationArchive {
     })
     this.parsers = new Map()
     this.lastTimestamp = ""
-    this.nextRealtimeSourceLine = 1
+    this.tailer = new RealtimeTailer()
+    this.sourceResolver = new ConversationSourceLineResolver({
+      codexHome: this.config.codexHome,
+      claudeConfigDir: this.config.claudeConfigDir,
+    })
+    this.recentInboundUserRecords = []
   }
 
   recordInboundMessage(prepared, context = {}) {
@@ -23,7 +28,10 @@ class ConversationArchive {
     }
 
     const quote = extractQuote(prepared.originalText || prepared.text || "")
-    const attachments = normalizeMediaList(prepared.attachments)
+    const attachments = normalizeMediaList(prepared.attachments, {
+      workspaceRoot: context.workspaceRoot,
+      stateDir: this.config.stateDir,
+    })
     const record = normalizeConversationRecord({
       type: "user",
       timestamp: prepared.receivedAt || new Date().toISOString(),
@@ -42,34 +50,112 @@ class ConversationArchive {
       source: {
         provider: prepared.provider === "weixin" ? "weixin" : "import",
         sourceType: "weixin.inbound",
-        sourceLine: this.allocateSourceLine(),
         rawId: normalizeText(prepared.messageId) || buildInboundRawId(prepared),
       },
     })
 
+    this.rememberInboundEquivalent(record)
     this.updateLastTimestamp([record])
     return this.writer.writeRecords([record])
   }
 
-  recordRuntimeRaw({ runtimeId = "", raw = null, mappedEvent = null, workspaceRoot = "" } = {}) {
-    const parser = this.getRealtimeParser(runtimeId)
-    const records = parser.parseRaw({
-      raw,
-      mappedEvent,
-      fallbackTimestamp: this.lastTimestamp,
+  registerRealtimeSource({ runtimeId = "", threadId = "", workspaceRoot = "", sourceFile = "" } = {}) {
+    return this.sourceResolver.rememberSourceFile({
+      runtimeId,
+      threadId,
       workspaceRoot,
-      sourceLine: this.allocateSourceLine(),
+      sourceFile,
     })
-    this.updateLastTimestamp(records)
-    return this.writer.writeRecords(records)
   }
 
-  getRealtimeParser(runtimeId = "") {
-    const normalized = normalizeText(runtimeId).toLowerCase() || "codex"
-    if (!this.parsers.has(normalized)) {
-      this.parsers.set(normalized, createRealtimeParser(normalized))
+  ingestRealtimeSessionLine({ runtimeId = "", raw = null, sourceFile = "", sourceLine = 0, workspaceRoot = "" } = {}) {
+    return this.ingestSessionLine({
+      runtimeId,
+      raw,
+      sourceFile,
+      sourceLine,
+      workspaceRoot,
+      mode: "realtime",
+    })
+  }
+
+  recordRuntimeRaw({ runtimeId = "", raw = null, mappedEvent = null, workspaceRoot = "" } = {}) {
+    const threadId = extractThreadId(runtimeId, raw, mappedEvent)
+    const sourceFile = this.sourceResolver.resolveSourceFile({
+      runtimeId,
+      threadId,
+      workspaceRoot,
+    })
+    if (!sourceFile) {
+      return { writtenCount: 0, warnings: [] }
     }
-    return this.parsers.get(normalized)
+
+    const lines = this.tailer.readAvailableLines(sourceFile)
+    if (!lines.length) {
+      return { writtenCount: 0, warnings: [] }
+    }
+
+    const records = []
+    const warnings = []
+    for (const line of lines) {
+      try {
+        const parsed = JSON.parse(line.rawLine)
+        const result = this.ingestSessionLine({
+          runtimeId,
+          raw: parsed,
+          sourceFile: line.sourceFile,
+          sourceLine: line.sourceLine,
+          workspaceRoot,
+          mode: "realtime",
+          deferWrite: true,
+        })
+        records.push(...result.records)
+        warnings.push(...result.warnings)
+      } catch (error) {
+        warnings.push(`Invalid realtime JSONL line ${line.sourceLine} in ${sourceFile}: ${error.message}`)
+      }
+    }
+
+    this.updateLastTimestamp(records)
+    const writeResult = this.writer.writeRecords(records)
+    return {
+      writtenCount: writeResult.writtenCount,
+      warnings: [...warnings, ...writeResult.warnings],
+    }
+  }
+
+  ingestSessionLine({ runtimeId = "", raw = null, sourceFile = "", sourceLine = 0, workspaceRoot = "", mode = "import", deferWrite = false } = {}) {
+    const parser = this.getLineParser(runtimeId, mode)
+    const parsedRecords = parser.parseRaw({
+      raw,
+      workspaceRoot,
+      sourceFile,
+      sourceLine,
+      fallbackTimestamp: this.lastTimestamp,
+    })
+    const records = parsedRecords.filter((record) => !this.shouldDropRealtimeRecord(record, mode))
+    this.updateLastTimestamp(records)
+    if (deferWrite) {
+      return {
+        records,
+        warnings: [],
+      }
+    }
+    const writeResult = this.writer.writeRecords(records)
+    return {
+      records,
+      warnings: writeResult.warnings,
+      writtenCount: writeResult.writtenCount,
+    }
+  }
+
+  getLineParser(runtimeId = "", mode = "realtime") {
+    const normalized = normalizeText(runtimeId).toLowerCase() || "codex"
+    const cacheKey = `${normalized}:${mode}`
+    if (!this.parsers.has(cacheKey)) {
+      this.parsers.set(cacheKey, createLineParser(normalized, mode, this.config.stateDir))
+    }
+    return this.parsers.get(cacheKey)
   }
 
   updateLastTimestamp(records = []) {
@@ -81,18 +167,48 @@ class ConversationArchive {
     }
   }
 
-  allocateSourceLine() {
-    const next = this.nextRealtimeSourceLine
-    this.nextRealtimeSourceLine += 1
-    return next
+  rememberInboundEquivalent(record) {
+    if (record?.type !== "user") {
+      return
+    }
+    this.recentInboundUserRecords.push({
+      text: normalizeText(record.text),
+      threadId: normalizeText(record.threadId),
+      workspaceRoot: normalizeText(record.workspaceRoot),
+      timestamp: normalizeText(record.timestamp),
+    })
+    if (this.recentInboundUserRecords.length > 20) {
+      this.recentInboundUserRecords.shift()
+    }
+  }
+
+  shouldDropRealtimeRecord(record, mode = "") {
+    if (mode !== "realtime") {
+      return false
+    }
+    if (record?.type !== "user" || normalizeText(record?.runtimeId) !== "codex") {
+      return false
+    }
+    if (normalizeText(record?.source?.provider) !== "codex") {
+      return false
+    }
+    const text = normalizeText(record.text)
+    if (!text) {
+      return false
+    }
+    return this.recentInboundUserRecords.some((entry) => (
+      entry.text === text
+      && (!entry.threadId || !record.threadId || entry.threadId === record.threadId)
+      && (!entry.workspaceRoot || !record.workspaceRoot || entry.workspaceRoot === record.workspaceRoot)
+    ))
   }
 }
 
-function createRealtimeParser(runtimeId) {
+function createLineParser(runtimeId, mode, stateDir) {
   if (runtimeId === "claudecode") {
-    return createClaudeCodeRealtimeParser()
+    return createClaudeCodeImportParser({ mode, stateDir })
   }
-  return createCodexRealtimeParser()
+  return createCodexImportParser({ mode, stateDir })
 }
 
 function extractQuote(text) {
@@ -118,6 +234,18 @@ function buildInboundRawId(prepared = {}) {
     ...normalizeMediaList(prepared.attachments).map((item) => normalizeText(item.path || item.fileName || item.stickerId)),
   ]
   return parts.filter(Boolean).join("|")
+}
+
+function extractThreadId(runtimeId, raw, mappedEvent) {
+  if (normalizeText(runtimeId).toLowerCase() === "claudecode") {
+    return normalizeText(mappedEvent?.payload?.threadId || raw?.sessionId || raw?.session_id)
+  }
+  return normalizeText(
+    mappedEvent?.payload?.threadId
+    || raw?.params?.threadId
+    || raw?.params?.turn?.threadId
+    || raw?.payload?.id
+  )
 }
 
 function normalizeText(value) {

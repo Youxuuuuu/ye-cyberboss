@@ -1,16 +1,18 @@
 const {
   buildOperationDescriptor,
   buildToolResultMeta,
-  buildVisibleAssistantRecordFromResult,
+  buildVisibleAssistantRecordFromToolCall,
 } = require("../normalize-operation")
 const { buildConversationUserRecord } = require("../normalize-prompt")
 const { normalizeConversationRecord } = require("../normalize-record")
 const { normalizeMediaList } = require("../normalize-media")
+const { normalizeToolName } = require("../normalize-tool-call")
 const { normalizeTimestamp } = require("../normalize-time")
 
 class ClaudeCodeParser {
-  constructor({ mode = "import" } = {}) {
+  constructor({ mode = "import", stateDir = "" } = {}) {
     this.mode = mode
+    this.stateDir = stateDir
     this.currentThreadId = ""
     this.currentTurnId = ""
     this.currentWorkspaceRoot = ""
@@ -59,6 +61,8 @@ class ClaudeCodeParser {
       workspaceRoot: this.currentWorkspaceRoot,
       meta: buildUserMeta({
         attachments,
+        workspaceRoot: this.currentWorkspaceRoot,
+        stateDir: this.stateDir,
       }),
       source: {
         provider: "claudecode",
@@ -97,9 +101,9 @@ class ClaudeCodeParser {
           source: {
             provider: "claudecode",
             sourceType: `claudecode.${this.mode}.thinking`,
+            rawId: `${normalizeText(raw.uuid) || sourceLine}:${index}`,
             sourceFile,
             sourceLine,
-            rawId: `${normalizeText(raw.uuid) || sourceLine}:thinking:${index}`,
             uuid: normalizeText(raw.uuid),
             parentUuid: normalizeText(raw.parentUuid),
           },
@@ -118,9 +122,9 @@ class ClaudeCodeParser {
           source: {
             provider: "claudecode",
             sourceType: `claudecode.${this.mode}.assistant`,
+            rawId: `${normalizeText(raw.uuid) || sourceLine}:${index}`,
             sourceFile,
             sourceLine,
-            rawId: `${normalizeText(raw.uuid) || sourceLine}:assistant:${index}`,
             uuid: normalizeText(raw.uuid),
             parentUuid: normalizeText(raw.parentUuid),
           },
@@ -130,8 +134,12 @@ class ClaudeCodeParser {
       if (item.type === "tool_use") {
         const callId = normalizeText(item.id || `${normalizeText(raw.uuid) || sourceLine}:tool:${index}`)
         const descriptor = buildOperationDescriptor({
-          toolName: item.name,
+          runtimeId: "claudecode",
+          mode: this.mode,
+          toolName: normalizeToolName(item.name),
           args: item.input && typeof item.input === "object" ? item.input : {},
+          workspaceRoot: this.currentWorkspaceRoot,
+          stateDir: this.stateDir,
         })
         const operationRecord = normalizeConversationRecord({
           type: "operation",
@@ -144,16 +152,20 @@ class ClaudeCodeParser {
           meta: descriptor.meta,
           source: {
             provider: "claudecode",
-            sourceType: `claudecode.${this.mode}.tool_use`,
+            sourceType: "claudecode.operation",
             sourceFile,
             sourceLine,
-            rawId: `${normalizeText(raw.uuid) || sourceLine}:tool_use:${index}`,
+            rawId: `${normalizeText(raw.uuid) || sourceLine}:${index}`,
             callId,
             uuid: normalizeText(raw.uuid),
             parentUuid: normalizeText(raw.parentUuid),
           },
+          _operationArgs: item.input && typeof item.input === "object" ? item.input : {},
         })
-        this.pendingOperations.set(callId, operationRecord)
+        this.pendingOperations.set(callId, {
+          record: operationRecord,
+          args: item.input && typeof item.input === "object" ? item.input : {},
+        })
         records.push(operationRecord)
       }
     })
@@ -176,7 +188,8 @@ class ClaudeCodeParser {
       if (!callId || !this.pendingOperations.has(callId)) {
         continue
       }
-      const existing = this.pendingOperations.get(callId)
+      const pending = this.pendingOperations.get(callId)
+      const existing = pending.record
       const outputText = extractToolResultContent(item.content)
       const updatedOperation = normalizeConversationRecord({
         ...existing,
@@ -189,27 +202,33 @@ class ClaudeCodeParser {
           ...buildToolResultMeta(outputText),
         },
       })
-      this.pendingOperations.set(callId, updatedOperation)
+      this.pendingOperations.set(callId, {
+        ...pending,
+        record: updatedOperation,
+      })
       records.push(updatedOperation)
 
-      const assistantVisible = buildVisibleAssistantRecordFromResult({
+      const normalizedVisible = buildVisibleAssistantRecordFromToolCall({
         toolName: updatedOperation?.meta?.toolName,
+        args: pending.args || {},
         outputText,
+        workspaceRoot: this.currentWorkspaceRoot,
+        stateDir: this.stateDir,
       })
-      if (assistantVisible) {
+      if (normalizedVisible) {
         records.push(normalizeConversationRecord({
-          ...assistantVisible,
+          ...normalizedVisible,
           timestamp,
           runtimeId: "claudecode",
           threadId,
           turnId,
           workspaceRoot: this.currentWorkspaceRoot,
           meta: {
-            ...assistantVisible.meta,
+            ...normalizedVisible.meta,
           },
           source: {
             provider: "claudecode",
-            sourceType: `claudecode.${this.mode}.tool_result.visible`,
+            sourceType: "claudecode.visible",
             sourceFile,
             sourceLine,
             rawId: `${normalizeText(raw.uuid) || sourceLine}:visible:${index}`,
@@ -226,11 +245,12 @@ class ClaudeCodeParser {
 }
 
 function createClaudeCodeImportParser() {
-  return new ClaudeCodeParser({ mode: "import" })
+  const [options = {}] = arguments
+  return new ClaudeCodeParser(options)
 }
 
-function buildUserMeta({ attachments = [] } = {}) {
-  const normalizedAttachments = normalizeMediaList(attachments)
+function buildUserMeta({ attachments = [], workspaceRoot = "", stateDir = "" } = {}) {
+  const normalizedAttachments = normalizeMediaList(attachments, { workspaceRoot, stateDir })
   return {
     attachments: normalizedAttachments,
     files: normalizedAttachments.filter((item) => item.kind === "file"),

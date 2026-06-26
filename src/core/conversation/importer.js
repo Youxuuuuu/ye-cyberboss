@@ -14,7 +14,7 @@ class ConversationImporter {
   }
 
   importFile({ runtimeId = "", sourceFile = "", workspaceRoot = "" } = {}) {
-    const parser = createImportParser(runtimeId)
+    const parser = createImportParser(runtimeId, this.config.stateDir)
     const warnings = []
     const records = []
     const raw = fs.readFileSync(sourceFile, "utf8")
@@ -49,12 +49,12 @@ class ConversationImporter {
   }
 }
 
-function createImportParser(runtimeId = "") {
+function createImportParser(runtimeId = "", stateDir = "") {
   const normalized = String(runtimeId || "").trim().toLowerCase()
   if (normalized === "claudecode") {
-    return createClaudeCodeImportParser()
+    return createClaudeCodeImportParser({ mode: "import", stateDir })
   }
-  return createCodexImportParser()
+  return createCodexImportParser({ mode: "import", stateDir })
 }
 
 module.exports = {
