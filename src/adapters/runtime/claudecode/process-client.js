@@ -400,6 +400,7 @@ function buildArgs({ model, permissionMode, disableVerbose, extraArgs, mcpConfig
     "--output-format", "stream-json",
     "--input-format", "stream-json",
     "--permission-prompt-tool", "stdio",
+    "--thinking-display", "summarized",
   ];
   if (!disableVerbose) {
     args.push("--verbose");
