@@ -5,9 +5,10 @@ const path = require("path")
 const { normalizeWorkspaceRoot } = require("../workspace-root")
 
 class ConversationSourceLineResolver {
-  constructor({ codexHome = "", claudeConfigDir = "" } = {}) {
+  constructor({ codexHome = "", claudeConfigDir = "", maxEntries = 1024 } = {}) {
     this.codexSessionsDir = path.join(codexHome || path.join(os.homedir(), ".codex"), "sessions")
     this.claudeProjectsDir = path.join(claudeConfigDir || path.join(os.homedir(), ".claude"), "projects")
+    this.maxEntries = Number(maxEntries) > 0 ? Math.floor(Number(maxEntries)) : 1024
     this.sourceFileByRuntimeThread = new Map()
   }
 
@@ -15,7 +16,7 @@ class ConversationSourceLineResolver {
     const key = buildThreadKey(runtimeId, threadId, workspaceRoot)
     const normalizedSourceFile = normalizeText(sourceFile)
     if (key && normalizedSourceFile) {
-      this.sourceFileByRuntimeThread.set(key, normalizedSourceFile)
+      setBoundedMap(this.sourceFileByRuntimeThread, key, normalizedSourceFile, this.maxEntries)
     }
     return normalizedSourceFile
   }
@@ -35,7 +36,7 @@ class ConversationSourceLineResolver {
     }
 
     if (key && resolved) {
-      this.sourceFileByRuntimeThread.set(key, resolved)
+      setBoundedMap(this.sourceFileByRuntimeThread, key, resolved, this.maxEntries)
     }
     return resolved
   }
@@ -66,6 +67,10 @@ class ConversationSourceLineResolver {
       return ""
     }
     return findFileByThreadId(this.codexSessionsDir, normalizedThreadId)
+  }
+
+  clear() {
+    this.sourceFileByRuntimeThread.clear()
   }
 }
 
@@ -171,6 +176,18 @@ function normalizeThreadId(value) {
 
 function normalizeText(value) {
   return typeof value === "string" ? value.trim() : ""
+}
+
+function setBoundedMap(map, key, value, maxEntries) {
+  map.delete(key)
+  while (map.size >= maxEntries) {
+    const oldest = map.keys().next().value
+    if (oldest === undefined) {
+      break
+    }
+    map.delete(oldest)
+  }
+  map.set(key, value)
 }
 
 module.exports = {

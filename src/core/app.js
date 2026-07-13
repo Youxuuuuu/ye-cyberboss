@@ -168,6 +168,7 @@ class CyberbossApp {
 
     const shutdown = createShutdownController(async () => {
       this.clearPendingImageInboundTimers();
+      this.conversationArchive?.close?.();
       await this.closeLocationServer();
       await this.runtimeAdapter.close();
     });
@@ -218,6 +219,7 @@ class CyberbossApp {
     } finally {
       shutdown.dispose();
       this.clearPendingImageInboundTimers();
+      this.conversationArchive?.close?.();
       await this.closeLocationServer();
       await this.runtimeAdapter.close();
     }
@@ -1491,7 +1493,8 @@ class CyberbossApp {
 
   recordConversationInbound(prepared, context = {}) {
     try {
-      this.conversationArchive?.recordInboundMessage(prepared, context);
+      const result = this.conversationArchive?.recordInboundMessage(prepared, context);
+      this.logConversationArchiveWarnings(result?.warnings);
     } catch (error) {
       console.warn(`[cyberboss] conversation inbound archive failed: ${formatErrorMessage(error)}`);
     }
@@ -1499,14 +1502,21 @@ class CyberbossApp {
 
   recordConversationRuntimeRaw(event, raw) {
     try {
-      this.conversationArchive?.recordRuntimeRaw({
+      const result = this.conversationArchive?.recordRuntimeRaw({
         runtimeId: this.runtimeAdapter.describe().id,
         raw,
         mappedEvent: event,
         workspaceRoot: this.resolveConversationWorkspaceRoot(event),
       });
+      this.logConversationArchiveWarnings(result?.warnings);
     } catch (error) {
       console.warn(`[cyberboss] conversation runtime archive failed: ${formatErrorMessage(error)}`);
+    }
+  }
+
+  logConversationArchiveWarnings(warnings = []) {
+    for (const warning of Array.isArray(warnings) ? warnings : []) {
+      console.warn(`[cyberboss] conversation archive warning: ${warning}`);
     }
   }
 

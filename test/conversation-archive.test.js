@@ -7,6 +7,7 @@ const path = require("path")
 const {
   ConversationArchive,
   ConversationImporter,
+  ConversationWriter,
 } = require("../src/core/conversation")
 const { ConversationSourceLineResolver } = require("../src/core/conversation/source-line-resolver")
 
@@ -462,7 +463,12 @@ test("codex import extracts saved attachments into canonical user media without 
   assert.equal(userRecords[0].meta.attachments[0].relativePath, "inbox/2026-06-25/attachment-2.png")
   assert.equal(userRecords[0].meta.files[0].relativePath, "inbox/2026-06-25/小诗.txt")
   assert.equal(userRecords[0].meta.stickers[0].relativePath, "stickers/assets/stk_025.gif")
-  assert.equal(userRecords[0].meta.files[0].filePath.includes("(original name:"), false)
+  assert.equal(userRecords[0].meta.files[0].path.includes("(original name:"), false)
+  assert.equal("filePath" in userRecords[0].meta.files[0], false)
+  assert.equal("localPath" in userRecords[0].meta.files[0], false)
+  assert.equal("savedPath" in userRecords[0].meta.files[0], false)
+  assert.equal("mimeType" in userRecords[0].meta.files[0], false)
+  assert.equal("type" in userRecords[0].meta.files[0], false)
   assert.equal(userRecords[0].id.includes(sourceFile), false)
   assert.match(userRecords[0].id, /^codex:[0-9a-f]{16}$/u)
   assert.equal(userRecords[0].meta.sourceKey, userRecords[0].source.sourceKey)
@@ -581,6 +587,290 @@ test("realtime and import produce matching source keys and visible media for the
   const imported = simplifyRecords(readConversationDay(importStateDir, "2026-06-14"))
   const realtime = simplifyRecords(readConversationDay(realtimeStateDir, "2026-06-14"))
   assert.deepEqual(realtime, imported)
+})
+
+test("realtime parser state is isolated by source file", () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-isolation-"))
+  const sourceA = path.join(stateDir, "source-a.jsonl")
+  const sourceB = path.join(stateDir, "source-b.jsonl")
+  writeJsonlFixture(sourceA, [
+    sessionMeta("thread-a"),
+    turnContext("turn-a"),
+    responseUser("first A"),
+  ])
+  writeJsonlFixture(sourceB, [
+    sessionMeta("thread-b"),
+    turnContext("turn-b"),
+    responseUser("first B"),
+  ])
+
+  const archive = new ConversationArchive({
+    config: {
+      conversationDir: path.join(stateDir, "conversations"),
+      stateDir,
+    },
+  })
+  archive.registerRealtimeSource({ runtimeId: "codex", sourceFile: sourceA, workspaceRoot: WORKSPACE_ROOT })
+  archive.registerRealtimeSource({ runtimeId: "codex", sourceFile: sourceB, workspaceRoot: WORKSPACE_ROOT })
+  archive.pollRealtimeSources()
+
+  fs.appendFileSync(sourceA, `${JSON.stringify(responseAssistant("second A"))}\n`, "utf8")
+  archive.pollRealtimeSources()
+
+  const records = [
+    ...readConversationDay(stateDir, "2026-06-14"),
+  ]
+  assert.ok(records.some((record) => record.text === "second A" && record.threadId === "thread-a"))
+  assert.equal(records.some((record) => record.text === "second A" && record.threadId === "thread-b"), false)
+  assert.ok(records.filter((record) => record.threadId === "thread-b").every((record) => record.source.sourceFile === path.resolve(sourceB)))
+  archive.close()
+})
+
+test("codex filename UUID takes precedence over session metadata thread id", () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-thread-id-"))
+  const filenameThreadId = "11111111-2222-3333-4444-555555555555"
+  const sourceFile = path.join(stateDir, `${filenameThreadId}.jsonl`)
+  writeJsonlFixture(sourceFile, [
+    sessionMeta("payload-thread-id"),
+    turnContext("turn-filename-id"),
+    responseUser("filename wins"),
+  ])
+
+  const importer = new ConversationImporter({
+    config: {
+      conversationDir: path.join(stateDir, "conversations"),
+      stateDir,
+    },
+    logger: { warn() {} },
+  })
+  importer.importFile({ runtimeId: "codex", sourceFile, workspaceRoot: WORKSPACE_ROOT })
+
+  const record = readConversationDay(stateDir, "2026-06-14").find((item) => item.text === "filename wins")
+  assert.equal(record.threadId, filenameThreadId)
+})
+
+test("conversation APIs reject unknown runtimes and quarantine unmatched inbound messages", () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-guards-"))
+  const sourceFile = path.join(stateDir, "source.jsonl")
+  writeJsonlFixture(sourceFile, [sessionMeta("thread-guard")])
+  const warnings = []
+  const importer = new ConversationImporter({
+    config: {
+      conversationDir: path.join(stateDir, "conversations"),
+      stateDir,
+    },
+    logger: { warn(message) { warnings.push(message) } },
+  })
+  assert.throws(
+    () => importer.importFile({ runtimeId: "unknown-runtime", sourceFile }),
+    /unsupported conversation runtime/u,
+  )
+
+  const archive = new ConversationArchive({
+    config: {
+      conversationDir: path.join(stateDir, "conversations"),
+      stateDir,
+      pendingInboundTtlMs: 10,
+    },
+    logger: { warn(message) { warnings.push(message) }, error(message) { warnings.push(message) } },
+  })
+  archive.recordInboundMessage({
+    provider: "weixin",
+    messageId: "unmatched-1",
+    text: "will not be silently lost",
+    receivedAt: "2020-01-01T00:00:00.000Z",
+  }, { runtimeId: "codex" })
+  archive.cleanupExpiredPendingInboundRecords(Date.parse("2020-01-01T00:00:01.000Z"))
+  const quarantineFile = path.join(stateDir, "conversations", "_unmatched-inbound.jsonl")
+  assert.equal(fs.existsSync(quarantineFile), true)
+  const quarantine = JSON.parse(fs.readFileSync(quarantineFile, "utf8").trim())
+  assert.equal(quarantine.type, "unmatched_inbound")
+  assert.equal(quarantine.inbound.messageId, "unmatched-1")
+  assert.ok(warnings.some((message) => message.includes("quarantined")))
+  archive.close()
+})
+
+test("conversation writer reports actual changes, rejects empty directories, and closes polling", () => {
+  assert.throws(() => new ConversationWriter(), /requires conversationDir/u)
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-writer-"))
+  const writer = new ConversationWriter({ conversationDir: path.join(stateDir, "conversations") })
+  const input = {
+    type: "user",
+    timestamp: "2026-06-14T08:23:11.500Z",
+    runtimeId: "codex",
+    threadId: "thread-writer",
+    turnId: "turn-writer",
+    workspaceRoot: WORKSPACE_ROOT,
+    text: "first",
+    source: {
+      provider: "codex",
+      sourceFile: path.join(stateDir, "source.jsonl"),
+      sourceLine: 1,
+      rawId: "writer-1",
+    },
+  }
+  assert.equal(writer.writeRecords([input]).writtenCount, 1)
+  assert.equal(writer.writeRecords([input]).writtenCount, 0)
+  assert.equal(writer.writeRecords([{ ...input, text: "updated" }]).updatedCount, 1)
+
+  const archive = new ConversationArchive({
+    config: {
+      conversationDir: path.join(stateDir, "archive"),
+      stateDir,
+      maxTrackedRealtimeSources: 1,
+    },
+  })
+  archive.registerRealtimeSource({ runtimeId: "codex", threadId: "thread-a", sourceFile: path.join(stateDir, "a.jsonl") })
+  archive.registerRealtimeSource({ runtimeId: "codex", threadId: "thread-b", sourceFile: path.join(stateDir, "b.jsonl") })
+  assert.equal(archive.trackedRealtimeSources.size, 1)
+  assert.equal(archive.closed, false)
+  archive.close()
+  assert.equal(archive.closed, true)
+  assert.equal(archive.realtimePollTimer, null)
+})
+
+test("realtime checkpoint survives restart and does not replay deleted history", () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-restart-"))
+  const sourceFile = path.join(stateDir, "claude-restart.jsonl")
+  writeJsonlFixture(sourceFile, [
+    claudeUser("claude-restart-1", "prompt-old", "user-old", "old history"),
+  ])
+
+  const config = {
+    conversationDir: path.join(stateDir, "conversations"),
+    stateDir,
+    conversationDeletionStateFile: path.join(stateDir, "conversation-deletion-state.json"),
+  }
+  const first = new ConversationArchive({ config })
+  first.registerRealtimeSource({
+    runtimeId: "claudecode",
+    threadId: "claude-restart-1",
+    workspaceRoot: WORKSPACE_ROOT,
+    sourceFile,
+  })
+  first.pollRealtimeSources()
+
+  const dayFile = path.join(config.conversationDir, "2026-06-17.jsonl")
+  const oldRecord = readConversationDay(stateDir, "2026-06-17").find((record) => record.text === "old history")
+  assert.ok(oldRecord)
+  const remaining = readConversationDay(stateDir, "2026-06-17")
+    .filter((record) => record.source.sourceKey !== oldRecord.source.sourceKey)
+  fs.writeFileSync(dayFile, `${remaining.map((record) => JSON.stringify(record)).join("\n")}\n`, "utf8")
+  first.close()
+
+  const checkpointFile = path.join(stateDir, "conversation-realtime-checkpoints.json")
+  assert.equal(fs.existsSync(checkpointFile), true)
+
+  const second = new ConversationArchive({ config })
+  second.registerRealtimeSource({
+    runtimeId: "claudecode",
+    threadId: "claude-restart-1",
+    workspaceRoot: WORKSPACE_ROOT,
+    sourceFile,
+  })
+  second.pollRealtimeSources()
+  assert.equal(readConversationDay(stateDir, "2026-06-17").some((record) => record.text === "old history"), false)
+
+  fs.appendFileSync(sourceFile, `${JSON.stringify(claudeUser(
+    "claude-restart-1",
+    "prompt-new",
+    "user-new",
+    "new after restart",
+    "2026-06-17T05:52:00.000Z",
+  ))}\n`, "utf8")
+  second.pollRealtimeSources()
+  const afterRestart = readConversationDay(stateDir, "2026-06-17")
+  assert.equal(afterRestart.some((record) => record.text === "old history"), false)
+  assert.equal(afterRestart.filter((record) => record.text === "new after restart").length, 1)
+
+  const deletionState = JSON.parse(fs.readFileSync(path.join(stateDir, "conversation-deletion-state.json"), "utf8"))
+  assert.ok(deletionState.deletedSourceKeys.includes(oldRecord.source.sourceKey))
+  second.close()
+})
+
+test("realtime checkpoint hydrates parser state before reading new tool results", () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-hydrate-"))
+  const sourceFile = path.join(stateDir, "claude-hydrate.jsonl")
+  writeJsonlFixture(sourceFile, [
+    claudeAssistant("claude-hydrate-1", "assistant-tool-1", "turn-hydrate-1", [
+      { type: "tool_use", id: "tool-hydrate-1", name: "Read", input: { file_path: "src/core/app.js" } },
+    ]),
+  ])
+
+  const config = {
+    conversationDir: path.join(stateDir, "conversations"),
+    stateDir,
+  }
+  const first = new ConversationArchive({ config })
+  first.registerRealtimeSource({
+    runtimeId: "claudecode",
+    threadId: "claude-hydrate-1",
+    workspaceRoot: WORKSPACE_ROOT,
+    sourceFile,
+  })
+  first.pollRealtimeSources()
+  const initialOperation = readConversationDay(stateDir, "2026-06-17")
+    .find((record) => record.type === "operation")
+  assert.ok(initialOperation)
+  assert.equal(initialOperation.meta.toolResultPreview, undefined)
+  first.close()
+
+  fs.appendFileSync(sourceFile, `${JSON.stringify(claudeToolResult(
+    "claude-hydrate-1",
+    "tool-result-hydrate-1",
+    "tool-hydrate-1",
+    "read completed",
+    "2026-06-17T05:51:40.000Z",
+  ))}\n`, "utf8")
+
+  const second = new ConversationArchive({ config })
+  second.registerRealtimeSource({
+    runtimeId: "claudecode",
+    threadId: "claude-hydrate-1",
+    workspaceRoot: WORKSPACE_ROOT,
+    sourceFile,
+  })
+  second.pollRealtimeSources()
+  const hydratedOperation = readConversationDay(stateDir, "2026-06-17")
+    .find((record) => record.type === "operation")
+  assert.equal(hydratedOperation.meta.toolResultPreview, "read completed")
+  second.close()
+})
+
+test("conversation writer persists tombstones when a source key is manually removed", () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-tombstone-"))
+  const conversationDir = path.join(stateDir, "conversations")
+  const sourceFile = path.join(stateDir, "source.jsonl")
+  const writer = new ConversationWriter({
+    conversationDir,
+    deletionStateFile: path.join(stateDir, "conversation-deletion-state.json"),
+  })
+  const input = {
+    type: "user",
+    timestamp: "2026-06-14T08:23:11.500Z",
+    runtimeId: "codex",
+    threadId: "thread-tombstone",
+    turnId: "turn-tombstone",
+    workspaceRoot: WORKSPACE_ROOT,
+    text: "remove me",
+    source: {
+      provider: "codex",
+      sourceFile,
+      sourceLine: 1,
+      rawId: "tombstone-1",
+    },
+  }
+  writer.writeRecords([input])
+  const dayFile = path.join(conversationDir, "2026-06-14.jsonl")
+  const writtenRecord = JSON.parse(fs.readFileSync(dayFile, "utf8").trim())
+  fs.writeFileSync(dayFile, "", "utf8")
+
+  const replay = writer.writeRecords([input])
+  assert.equal(replay.writtenCount, 0)
+  assert.equal(replay.ignoredCount, 1)
+  assert.equal(fs.readFileSync(dayFile, "utf8"), "")
+  const state = JSON.parse(fs.readFileSync(path.join(stateDir, "conversation-deletion-state.json"), "utf8"))
+  assert.ok(state.deletedSourceKeys.includes(writtenRecord.source.sourceKey))
 })
 
 function sessionMeta(threadId, timestamp = "2026-06-14T08:23:11.319Z") {

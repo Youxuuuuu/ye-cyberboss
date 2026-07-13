@@ -1,4 +1,5 @@
 const fs = require("fs")
+const path = require("path")
 
 const { ConversationWriter } = require("./writer")
 const { createClaudeCodeImportParser } = require("./providers/claudecode-import")
@@ -9,15 +10,25 @@ class ConversationImporter {
     this.config = config || {}
     this.writer = writer || new ConversationWriter({
       conversationDir: this.config.conversationDir,
+      deletionStateFile: this.config.conversationDeletionStateFile
+        || path.join(path.resolve(normalizeText(this.config.conversationDir) || "."), ".conversation-deletion-state.json"),
+      logger,
     })
     this.logger = logger
   }
 
   importFile({ runtimeId = "", sourceFile = "", workspaceRoot = "" } = {}) {
+    const normalizedSourceFile = normalizeSourceFile(sourceFile)
+    if (!normalizedSourceFile) {
+      throw new Error("conversation import requires sourceFile")
+    }
+    if (!fs.existsSync(normalizedSourceFile)) {
+      throw new Error(`conversation import sourceFile does not exist: ${normalizedSourceFile}`)
+    }
     const parser = createImportParser(runtimeId, this.config.stateDir)
     const warnings = []
     const records = []
-    const raw = fs.readFileSync(sourceFile, "utf8")
+    const raw = fs.readFileSync(normalizedSourceFile, "utf8")
     const lines = raw.split(/\r?\n/u)
 
     for (let index = 0; index < lines.length; index += 1) {
@@ -30,11 +41,11 @@ class ConversationImporter {
         records.push(...parser.parseRaw({
           raw: parsed,
           workspaceRoot,
-          sourceFile,
+          sourceFile: normalizedSourceFile,
           sourceLine: index + 1,
         }))
       } catch (error) {
-        const message = `Invalid JSONL line ${index + 1} in ${sourceFile}: ${error.message}`
+        const message = `Invalid JSONL line ${index + 1} in ${normalizedSourceFile}: ${error.message}`
         warnings.push(message)
         this.logger?.warn?.(message)
       }
@@ -54,7 +65,19 @@ function createImportParser(runtimeId = "", stateDir = "") {
   if (normalized === "claudecode") {
     return createClaudeCodeImportParser({ mode: "import", stateDir })
   }
-  return createCodexImportParser({ mode: "import", stateDir })
+  if (normalized === "codex") {
+    return createCodexImportParser({ mode: "import", stateDir })
+  }
+  throw new Error(`unsupported conversation runtime: ${normalized || "(empty)"}`)
+}
+
+function normalizeSourceFile(sourceFile) {
+  const normalized = typeof sourceFile === "string" ? sourceFile.trim() : ""
+  return normalized ? path.resolve(normalized) : ""
+}
+
+function normalizeText(value) {
+  return typeof value === "string" ? value.trim() : ""
 }
 
 module.exports = {

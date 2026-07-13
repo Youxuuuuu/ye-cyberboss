@@ -20,17 +20,12 @@ function normalizeMediaItem(item = {}, context = {}) {
   const normalized = {
     label: normalizeText(item.label),
     fileName: normalizeText(item.fileName) || basenameFromPath(absolutePath || item.relativePath),
-    relativePath: normalizeText(item.relativePath) || displayPath.relativePath,
+    relativePath: normalizeSlashPath(normalizeText(item.relativePath) || displayPath.relativePath),
     path: normalizeSlashPath(absolutePath),
-    filePath: normalizeSlashPath(absolutePath),
-    localPath: normalizeSlashPath(absolutePath),
-    savedPath: normalizeSlashPath(absolutePath),
     url: normalizeText(item.url),
-    mimeType: normalizeText(item.mimeType || item.contentType),
     contentType: normalizeText(item.contentType || item.mimeType),
     stickerId: normalizeText(item.stickerId),
     kind,
-    type: kind,
     isImage: inferIsImage(item, kind),
     fileMeta: normalizeText(item.fileMeta),
   }

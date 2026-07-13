@@ -1,3 +1,5 @@
+const path = require("path")
+
 const {
   buildOperationDescriptor,
   buildToolResultMeta,
@@ -11,12 +13,13 @@ const { normalizeToolName, parseStructuredValue } = require("../normalize-tool-c
 const { normalizeTimestamp } = require("../normalize-time")
 
 class CodexImportParser {
-  constructor({ mode = "import", stateDir = "" } = {}) {
+  constructor({ mode = "import", stateDir = "", maxStateEntries = 5000 } = {}) {
     this.mode = mode
     this.stateDir = stateDir
     this.currentThreadId = ""
     this.currentTurnId = ""
     this.currentWorkspaceRoot = ""
+    this.maxStateEntries = Number(maxStateEntries) > 0 ? Math.floor(Number(maxStateEntries)) : 5000
     this.pendingOperations = new Map()
     this.seenFallbackMessages = new Set()
     this.lastCanonicalUserByTurn = new Map()
@@ -27,8 +30,15 @@ class CodexImportParser {
       return []
     }
 
+    const filenameThreadId = extractCodexThreadIdFromSourceFile(sourceFile)
+    if (filenameThreadId) {
+      this.currentThreadId = filenameThreadId
+    }
+
     if (raw.type === "session_meta") {
-      this.currentThreadId = normalizeText(raw?.payload?.id) || this.currentThreadId
+      this.currentThreadId = filenameThreadId
+        || normalizeText(raw?.payload?.id)
+        || this.currentThreadId
       this.currentWorkspaceRoot = normalizeText(raw?.payload?.cwd || workspaceRoot) || this.currentWorkspaceRoot
       return []
     }
@@ -88,7 +98,7 @@ class CodexImportParser {
       if (this.seenFallbackMessages.has(messageKey)) {
         return []
       }
-      this.seenFallbackMessages.add(messageKey)
+      rememberBoundedSet(this.seenFallbackMessages, messageKey, this.maxStateEntries)
       if (role === "user") {
         const record = this.buildUserRecord({
           text,
@@ -143,10 +153,10 @@ class CodexImportParser {
         return []
       }
       const messageKey = buildFallbackMessageKey(role, this.currentTurnId, text)
-      if (this.seenFallbackMessages.has(messageKey)) {
+       if (this.seenFallbackMessages.has(messageKey)) {
         return []
       }
-      this.seenFallbackMessages.add(messageKey)
+       rememberBoundedSet(this.seenFallbackMessages, messageKey, this.maxStateEntries)
       if (role === "user") {
         const record = this.buildUserRecord({
           text,
@@ -191,10 +201,10 @@ class CodexImportParser {
         return []
       }
       if (operationRecord.source.callId) {
-        this.pendingOperations.set(operationRecord.source.callId, {
+        setBoundedMap(this.pendingOperations, operationRecord.source.callId, {
           record: operationRecord,
           args: operationRecord._operationArgs || {},
-        })
+        }, this.maxStateEntries)
       }
       return [operationRecord]
     }
@@ -215,10 +225,7 @@ class CodexImportParser {
           ...buildToolResultMeta(outputText),
         },
       })
-      this.pendingOperations.set(callId, {
-        ...pending,
-        record: updatedOperation,
-      })
+      this.pendingOperations.delete(callId)
 
       const records = [updatedOperation]
       const visibleAssistant = buildVisibleAssistantRecordFromToolCall({
@@ -346,7 +353,7 @@ class CodexImportParser {
       }
     }
     if (key && !isSystemCompact(record)) {
-      this.lastCanonicalUserByTurn.set(key, snapshotUserRecord(record))
+      setBoundedMap(this.lastCanonicalUserByTurn, key, snapshotUserRecord(record), this.maxStateEntries)
     }
     return record
   }
@@ -354,6 +361,38 @@ class CodexImportParser {
 
 function createCodexImportParser(options = {}) {
   return new CodexImportParser(options)
+}
+
+function extractCodexThreadIdFromSourceFile(sourceFile = "") {
+  const baseName = path.basename(normalizeText(sourceFile))
+  const match = baseName.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\.jsonl)?$/iu)
+  return match ? match[1] : ""
+}
+
+function rememberBoundedSet(set, value, maxEntries) {
+  if (set.has(value)) {
+    return
+  }
+  while (set.size >= maxEntries) {
+    const oldest = set.values().next().value
+    if (oldest === undefined) {
+      break
+    }
+    set.delete(oldest)
+  }
+  set.add(value)
+}
+
+function setBoundedMap(map, key, value, maxEntries) {
+  map.delete(key)
+  while (map.size >= maxEntries) {
+    const oldest = map.keys().next().value
+    if (oldest === undefined) {
+      break
+    }
+    map.delete(oldest)
+  }
+  map.set(key, value)
 }
 
 function buildFallbackMessageKey(role, turnId, text) {
@@ -438,4 +477,5 @@ function normalizeText(value) {
 module.exports = {
   CodexImportParser,
   createCodexImportParser,
+  extractCodexThreadIdFromSourceFile,
 }

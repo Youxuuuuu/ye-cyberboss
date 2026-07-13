@@ -17,7 +17,24 @@ function normalizeTimestamp(value, fallback = new Date().toISOString()) {
       return parsed.toISOString()
     }
   }
-  return normalizeTimestamp(fallback, new Date().toISOString())
+  if (fallback !== value) {
+    if (typeof fallback === "string" && fallback.trim()) {
+      const parsed = new Date(fallback.trim())
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed.toISOString()
+      }
+    }
+    if (fallback instanceof Date && !Number.isNaN(fallback.getTime())) {
+      return fallback.toISOString()
+    }
+    if (typeof fallback === "number" && Number.isFinite(fallback)) {
+      const parsed = new Date(fallback)
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed.toISOString()
+      }
+    }
+  }
+  return new Date().toISOString()
 }
 
 function toShanghaiDate(timestamp) {

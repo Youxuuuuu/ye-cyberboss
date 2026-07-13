@@ -83,6 +83,8 @@ function readConfig() {
     codexHome: readTextEnv("CODEX_HOME") || path.join(os.homedir(), ".codex"),
     sessionsFile: path.join(stateDir, "sessions.json"),
     conversationDir: path.join(stateDir, "conversations"),
+    conversationRealtimeCheckpointFile: path.join(stateDir, "conversation-realtime-checkpoints.json"),
+    conversationDeletionStateFile: path.join(stateDir, "conversation-deletion-state.json"),
     startWithCheckin: (mode === "start" && hasArgFlag(argv, "--checkin")) || readBoolEnv("CYBERBOSS_ENABLE_CHECKIN"),
   };
 }

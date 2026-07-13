@@ -11,17 +11,18 @@ const { normalizeToolName } = require("../normalize-tool-call")
 const { normalizeTimestamp } = require("../normalize-time")
 
 class ClaudeCodeParser {
-  constructor({ mode = "import", stateDir = "" } = {}) {
+  constructor({ mode = "import", stateDir = "", maxStateEntries = 5000 } = {}) {
     this.mode = mode
     this.stateDir = stateDir
     this.currentThreadId = ""
     this.currentTurnId = ""
     this.currentWorkspaceRoot = ""
+    this.maxStateEntries = Number(maxStateEntries) > 0 ? Math.floor(Number(maxStateEntries)) : 5000
     this.pendingOperations = new Map()
     this.lastCanonicalUserByTurn = new Map()
   }
 
-  parseRaw({ raw, workspaceRoot = "", sourceFile = "", sourceLine = 0 }) {
+  parseRaw({ raw, workspaceRoot = "", sourceFile = "", sourceLine = 0, fallbackTimestamp = "" }) {
     if (!raw || typeof raw !== "object") {
       return []
     }
@@ -34,19 +35,19 @@ class ClaudeCodeParser {
     }
 
     if (raw.type === "user") {
-      return this.parseUserEntry({ raw, sourceFile, sourceLine })
+      return this.parseUserEntry({ raw, sourceFile, sourceLine, fallbackTimestamp })
     }
     if (raw.type === "assistant") {
-      return this.parseAssistantEntry({ raw, sourceFile, sourceLine })
+      return this.parseAssistantEntry({ raw, sourceFile, sourceLine, fallbackTimestamp })
     }
 
     return []
   }
 
-  parseUserEntry({ raw, sourceFile, sourceLine }) {
+  parseUserEntry({ raw, sourceFile, sourceLine, fallbackTimestamp = "" }) {
     const content = raw?.message?.content ?? raw?.content ?? raw?.text ?? ""
     if (Array.isArray(content) && content.some((item) => item?.type === "tool_result")) {
-      return this.parseToolResults({ raw, content, sourceFile, sourceLine })
+      return this.parseToolResults({ raw, content, sourceFile, sourceLine, fallbackTimestamp })
     }
 
     const text = extractClaudeUserText(content)
@@ -63,7 +64,7 @@ class ClaudeCodeParser {
     ]
     const record = buildConversationUserRecord({
       text: extracted.text,
-      timestamp: normalizeTimestamp(raw.timestamp),
+      timestamp: normalizeTimestamp(raw.timestamp, fallbackTimestamp),
       runtimeId: "claudecode",
       threadId: normalizeText(raw.sessionId) || this.currentThreadId,
       turnId,
@@ -88,12 +89,12 @@ class ClaudeCodeParser {
     return record ? [this.rememberCanonicalUserRecord(record)] : []
   }
 
-  parseAssistantEntry({ raw, sourceFile, sourceLine }) {
+  parseAssistantEntry({ raw, sourceFile, sourceLine, fallbackTimestamp = "" }) {
     const items = Array.isArray(raw?.message?.content) ? raw.message.content : []
     const records = []
     const threadId = normalizeText(raw.sessionId) || this.currentThreadId
     const turnId = normalizeText(this.currentTurnId || raw.parentUuid || raw.uuid)
-    const timestamp = normalizeTimestamp(raw.timestamp)
+    const timestamp = normalizeTimestamp(raw.timestamp, fallbackTimestamp)
 
     items.forEach((item, index) => {
       if (!item || typeof item !== "object") {
@@ -173,10 +174,10 @@ class ClaudeCodeParser {
           },
           _operationArgs: item.input && typeof item.input === "object" ? item.input : {},
         })
-        this.pendingOperations.set(callId, {
+        setBoundedMap(this.pendingOperations, callId, {
           record: operationRecord,
           args: item.input && typeof item.input === "object" ? item.input : {},
-        })
+        }, this.maxStateEntries)
         records.push(operationRecord)
       }
     })
@@ -184,11 +185,11 @@ class ClaudeCodeParser {
     return records
   }
 
-  parseToolResults({ raw, content, sourceFile, sourceLine }) {
+  parseToolResults({ raw, content, sourceFile, sourceLine, fallbackTimestamp = "" }) {
     const records = []
     const threadId = normalizeText(raw.sessionId) || this.currentThreadId
     const turnId = normalizeText(this.currentTurnId || raw.parentUuid || raw.uuid)
-    const timestamp = normalizeTimestamp(raw.timestamp)
+    const timestamp = normalizeTimestamp(raw.timestamp, fallbackTimestamp)
 
     for (let index = 0; index < content.length; index += 1) {
       const item = content[index]
@@ -213,10 +214,7 @@ class ClaudeCodeParser {
           ...buildToolResultMeta(outputText),
         },
       })
-      this.pendingOperations.set(callId, {
-        ...pending,
-        record: updatedOperation,
-      })
+      this.pendingOperations.delete(callId)
       records.push(updatedOperation)
 
       const normalizedVisible = buildVisibleAssistantRecordFromToolCall({
@@ -280,7 +278,7 @@ class ClaudeCodeParser {
       }
     }
     if (key && !isSystemCompact(record)) {
-      this.lastCanonicalUserByTurn.set(key, snapshotUserRecord(record))
+      setBoundedMap(this.lastCanonicalUserByTurn, key, snapshotUserRecord(record), this.maxStateEntries)
     }
     return record
   }
@@ -289,6 +287,18 @@ class ClaudeCodeParser {
 function createClaudeCodeImportParser() {
   const [options = {}] = arguments
   return new ClaudeCodeParser(options)
+}
+
+function setBoundedMap(map, key, value, maxEntries) {
+  map.delete(key)
+  while (map.size >= maxEntries) {
+    const oldest = map.keys().next().value
+    if (oldest === undefined) {
+      break
+    }
+    map.delete(oldest)
+  }
+  map.set(key, value)
 }
 
 function buildUserMeta({ attachments = [], workspaceRoot = "", stateDir = "" } = {}) {
