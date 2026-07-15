@@ -307,7 +307,13 @@ class ConversationArchive {
       const lines = this.tailer.readAvailableLines(sourceFile)
       readSources.add(sourceFile)
       context.lastSeenAt = Date.now()
-      if (this.tailer.consumeReset?.(sourceFile)) {
+      const sourceChangeReason = this.tailer.consumeSourceChange?.(sourceFile)
+      if (sourceChangeReason) {
+        this.resetParserStateForSource(sourceFile)
+        warnings.push(
+          `Ignored non-append realtime source change (${sourceChangeReason}) in ${sourceFile}; resumed at the current file end`
+        )
+      } else if (this.tailer.consumeReset?.(sourceFile)) {
         this.resetParserStateForSource(sourceFile)
       }
       for (const line of lines) {

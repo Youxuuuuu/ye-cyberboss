@@ -837,6 +837,114 @@ test("realtime checkpoint hydrates parser state before reading new tool results"
   second.close()
 })
 
+test("realtime ignores in-place historical edits and keeps manual conversation edits", () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-source-edit-"))
+  const sourceFile = path.join(stateDir, "claude-source-edit.jsonl")
+  const config = {
+    conversationDir: path.join(stateDir, "conversations"),
+    stateDir,
+  }
+  writeJsonlFixture(sourceFile, [
+    claudeUser("claude-source-edit-1", "prompt-old", "user-old", "old history"),
+  ])
+
+  const archive = new ConversationArchive({ config })
+  archive.registerRealtimeSource({
+    runtimeId: "claudecode",
+    threadId: "claude-source-edit-1",
+    workspaceRoot: WORKSPACE_ROOT,
+    sourceFile,
+  })
+  archive.pollRealtimeSources()
+
+  const dayFile = path.join(config.conversationDir, "2026-06-17.jsonl")
+  const originalConversation = fs.readFileSync(dayFile, "utf8")
+  const manuallyEditedConversation = originalConversation.replace("old history", "manual conversation edit")
+  fs.writeFileSync(dayFile, manuallyEditedConversation, "utf8")
+
+  fs.writeFileSync(sourceFile, `${JSON.stringify(claudeUser(
+    "claude-source-edit-1",
+    "prompt-rewritten",
+    "user-rewritten",
+    `rewritten historical content ${"x".repeat(500)}`,
+  ))}\n`, "utf8")
+  const rewriteResult = archive.pollRealtimeSources()
+  assert.ok(rewriteResult.warnings.some((warning) => warning.includes("Ignored non-append realtime source change")))
+  assert.equal(fs.readFileSync(dayFile, "utf8"), manuallyEditedConversation)
+  assert.equal(readConversationDay(stateDir, "2026-06-17").some((record) => record.text.includes("rewritten historical")), false)
+
+  fs.appendFileSync(sourceFile, `${JSON.stringify(claudeUser(
+    "claude-source-edit-1",
+    "prompt-new",
+    "user-new",
+    "new realtime history",
+    "2026-06-17T05:52:00.000Z",
+  ))}\n`, "utf8")
+  archive.pollRealtimeSources()
+  const afterAppend = readConversationDay(stateDir, "2026-06-17")
+  assert.equal(afterAppend.filter((record) => record.text === "new realtime history").length, 1)
+  assert.equal(afterAppend.filter((record) => record.text === "manual conversation edit").length, 1)
+  archive.close()
+})
+
+test("realtime ignores deleted and recreated session files, then accepts later appends", () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-source-recreate-"))
+  const sourceFile = path.join(stateDir, "claude-source-recreate.jsonl")
+  const config = {
+    conversationDir: path.join(stateDir, "conversations"),
+    stateDir,
+  }
+  writeJsonlFixture(sourceFile, [
+    claudeUser("claude-source-recreate-1", "prompt-old-1", "user-old-1", "old history 1"),
+    claudeUser("claude-source-recreate-1", "prompt-old-2", "user-old-2", "old history 2"),
+    claudeUser("claude-source-recreate-1", "prompt-old-3", "user-old-3", "old history 3"),
+  ])
+
+  const archive = new ConversationArchive({ config })
+  archive.registerRealtimeSource({
+    runtimeId: "claudecode",
+    threadId: "claude-source-recreate-1",
+    workspaceRoot: WORKSPACE_ROOT,
+    sourceFile,
+  })
+  archive.pollRealtimeSources()
+
+  const dayFile = path.join(config.conversationDir, "2026-06-17.jsonl")
+  const beforeDelete = fs.readFileSync(dayFile, "utf8")
+  archive.close()
+  fs.rmSync(sourceFile)
+  const restarted = new ConversationArchive({ config })
+  restarted.registerRealtimeSource({
+    runtimeId: "claudecode",
+    threadId: "claude-source-recreate-1",
+    workspaceRoot: WORKSPACE_ROOT,
+    sourceFile,
+  })
+  restarted.pollRealtimeSources()
+  assert.equal(fs.readFileSync(dayFile, "utf8"), beforeDelete)
+
+  writeJsonlFixture(sourceFile, [
+    claudeUser("claude-source-recreate-1", "prompt-recreated", "user-recreated", "recreated history"),
+  ])
+  const recreateResult = restarted.pollRealtimeSources()
+  assert.ok(recreateResult.warnings.some((warning) => warning.includes("Ignored non-append realtime source change")))
+  assert.equal(fs.readFileSync(dayFile, "utf8"), beforeDelete)
+  assert.equal(readConversationDay(stateDir, "2026-06-17").some((record) => record.text === "recreated history"), false)
+
+  fs.appendFileSync(sourceFile, `${JSON.stringify(claudeUser(
+    "claude-source-recreate-1",
+    "prompt-new",
+    "user-new",
+    "new after recreate",
+    "2026-06-17T05:52:00.000Z",
+  ))}\n`, "utf8")
+  restarted.pollRealtimeSources()
+  const afterAppend = readConversationDay(stateDir, "2026-06-17")
+  assert.equal(afterAppend.filter((record) => record.text === "new after recreate").length, 1)
+  assert.equal(afterAppend.filter((record) => record.text.startsWith("old history")).length, 3)
+  restarted.close()
+})
+
 test("conversation writer persists tombstones when a source key is manually removed", () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-tombstone-"))
   const conversationDir = path.join(stateDir, "conversations")

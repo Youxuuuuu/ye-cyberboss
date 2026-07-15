@@ -1,5 +1,6 @@
 const fs = require("fs")
 const path = require("path")
+const crypto = require("crypto")
 
 class RealtimeTailer {
   constructor({ checkpointFile = "", bootstrapToEnd = false, logger = console } = {}) {
@@ -8,6 +9,7 @@ class RealtimeTailer {
     this.logger = logger
     this.stateByFile = new Map()
     this.resetFiles = new Set()
+    this.sourceChangeReasons = new Map()
     this.restoredFiles = new Set()
     this.pendingStates = new Map()
     this.loadCheckpoints()
@@ -32,12 +34,23 @@ class RealtimeTailer {
       this.stateByFile.set(normalizedSourceFile, state)
     }
 
-    if (stat.size < state.offset) {
-      this.rememberStateChange(normalizedSourceFile, state)
-      state = createEmptyState()
+    const sourceChangeReason = detectSourceChange(normalizedSourceFile, stat, state)
+    if (sourceChangeReason) {
+      const previousState = cloneState(state)
+      state = readStateAtEnd(normalizedSourceFile)
+      this.rememberStateChange(normalizedSourceFile, previousState)
       this.stateByFile.set(normalizedSourceFile, state)
       this.restoredFiles.delete(normalizedSourceFile)
       this.resetFiles.add(normalizedSourceFile)
+      this.sourceChangeReasons.set(normalizedSourceFile, sourceChangeReason)
+      return []
+    }
+
+    if (!hasFileTrackingMetadata(state)) {
+      const previousState = cloneState(state)
+      state.fileIdentity = buildFileIdentity(stat)
+      state.prefixHash = hashFilePrefix(normalizedSourceFile, state.offset)
+      this.rememberStateChange(normalizedSourceFile, previousState)
     }
 
     if (stat.size === state.offset) {
@@ -70,6 +83,8 @@ class RealtimeTailer {
       }
 
       this.rememberStateChange(normalizedSourceFile, previousState)
+      state.fileIdentity = buildFileIdentity(stat)
+      state.prefixHash = hashFilePrefix(normalizedSourceFile, state.offset)
       return lines
     } finally {
       fs.closeSync(handle)
@@ -218,11 +233,13 @@ class RealtimeTailer {
     }
     this.pendingStates.clear()
     this.resetFiles.clear()
+    this.sourceChangeReasons.clear()
   }
 
   clear() {
     this.stateByFile.clear()
     this.resetFiles.clear()
+    this.sourceChangeReasons.clear()
     this.restoredFiles.clear()
     this.pendingStates.clear()
   }
@@ -233,7 +250,19 @@ class RealtimeTailer {
       return false
     }
     this.resetFiles.delete(normalizedSourceFile)
+    this.sourceChangeReasons.delete(normalizedSourceFile)
     return true
+  }
+
+  consumeSourceChange(sourceFile = "") {
+    const normalizedSourceFile = normalizeSourceFile(sourceFile)
+    if (!normalizedSourceFile || !this.sourceChangeReasons.has(normalizedSourceFile)) {
+      return ""
+    }
+    const reason = this.sourceChangeReasons.get(normalizedSourceFile)
+    this.sourceChangeReasons.delete(normalizedSourceFile)
+    this.resetFiles.delete(normalizedSourceFile)
+    return reason
   }
 
   forget(sourceFile = "") {
@@ -244,6 +273,7 @@ class RealtimeTailer {
     this.stateByFile.delete(normalizedSourceFile)
     this.restoredFiles.delete(normalizedSourceFile)
     this.resetFiles.delete(normalizedSourceFile)
+    this.sourceChangeReasons.delete(normalizedSourceFile)
     this.pendingStates.delete(normalizedSourceFile)
   }
 
@@ -286,7 +316,7 @@ class RealtimeTailer {
       files[sourceFile] = cloneState(state)
     }
     writeFileAtomically(this.checkpointFile, JSON.stringify({
-      version: 1,
+      version: 2,
       updatedAt: new Date().toISOString(),
       files,
     }, null, 2) + "\n")
@@ -298,6 +328,8 @@ function createEmptyState() {
     offset: 0,
     sourceLine: 0,
     remainder: "",
+    fileIdentity: null,
+    prefixHash: "",
   }
 }
 
@@ -305,10 +337,13 @@ function readStateAtEnd(sourceFile) {
   const raw = fs.readFileSync(sourceFile, "utf8")
   const parts = raw.split(/\r?\n/u)
   const remainder = parts.pop() || ""
+  const stat = fs.statSync(sourceFile)
   return {
     offset: Buffer.byteLength(raw, "utf8"),
     sourceLine: parts.reduce((count, part) => count + (part.trim() ? 1 : 0), 0),
     remainder,
+    fileIdentity: buildFileIdentity(stat),
+    prefixHash: hashText(raw),
   }
 }
 
@@ -325,6 +360,8 @@ function normalizeState(value) {
     offset,
     sourceLine,
     remainder: typeof value.remainder === "string" ? value.remainder : "",
+    fileIdentity: normalizeFileIdentity(value.fileIdentity),
+    prefixHash: normalizeHash(value.prefixHash),
   }
 }
 
@@ -333,6 +370,123 @@ function cloneState(state) {
     offset: state.offset,
     sourceLine: state.sourceLine,
     remainder: state.remainder,
+    fileIdentity: state.fileIdentity ? { ...state.fileIdentity } : null,
+    prefixHash: state.prefixHash || "",
+  }
+}
+
+function detectSourceChange(sourceFile, stat, state) {
+  if (!state) {
+    return ""
+  }
+  if (stat.size < state.offset) {
+    return "truncated"
+  }
+  if (!hasFileTrackingMetadata(state)) {
+    return ""
+  }
+
+  const currentIdentity = buildFileIdentity(stat)
+  if (!sameFileIdentity(state.fileIdentity, currentIdentity)) {
+    return "replaced"
+  }
+
+  if (stat.size > state.offset && state.prefixHash) {
+    const currentPrefixHash = hashFilePrefix(sourceFile, state.offset)
+    if (currentPrefixHash !== state.prefixHash) {
+      return "historical_prefix_changed"
+    }
+  }
+  return ""
+}
+
+function hasFileTrackingMetadata(state) {
+  return Boolean(
+    state
+    && state.fileIdentity
+    && state.prefixHash
+  )
+}
+
+function buildFileIdentity(stat) {
+  return {
+    dev: normalizeStatIdentityValue(stat?.dev),
+    ino: normalizeStatIdentityValue(stat?.ino),
+    birthtimeMs: Number.isFinite(Number(stat?.birthtimeMs))
+      ? Number(stat.birthtimeMs)
+      : 0,
+  }
+}
+
+function normalizeFileIdentity(value) {
+  if (!value || typeof value !== "object") {
+    return null
+  }
+  return {
+    dev: normalizeStatIdentityValue(value.dev),
+    ino: normalizeStatIdentityValue(value.ino),
+    birthtimeMs: Number.isFinite(Number(value.birthtimeMs))
+      ? Number(value.birthtimeMs)
+      : 0,
+  }
+}
+
+function normalizeStatIdentityValue(value) {
+  if (typeof value === "bigint") {
+    return value.toString()
+  }
+  if (value == null) {
+    return ""
+  }
+  return String(value)
+}
+
+function sameFileIdentity(left, right) {
+  return Boolean(
+    left
+    && right
+    && left.dev === right.dev
+    && left.ino === right.ino
+    && left.birthtimeMs === right.birthtimeMs
+  )
+}
+
+function normalizeHash(value) {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : ""
+  return /^[a-f0-9]{64}$/u.test(normalized) ? normalized : ""
+}
+
+function hashText(value) {
+  return crypto.createHash("sha256").update(value, "utf8").digest("hex")
+}
+
+function hashFilePrefix(sourceFile, length) {
+  const requestedLength = Number(length)
+  if (!Number.isSafeInteger(requestedLength) || requestedLength < 0) {
+    return ""
+  }
+  const hash = crypto.createHash("sha256")
+  if (requestedLength === 0) {
+    return hash.digest("hex")
+  }
+
+  const handle = fs.openSync(sourceFile, "r")
+  try {
+    const chunkSize = 64 * 1024
+    const buffer = Buffer.alloc(Math.min(chunkSize, requestedLength))
+    let position = 0
+    while (position < requestedLength) {
+      const lengthToRead = Math.min(buffer.length, requestedLength - position)
+      const bytesRead = fs.readSync(handle, buffer, 0, lengthToRead, position)
+      if (!bytesRead) {
+        break
+      }
+      hash.update(buffer.subarray(0, bytesRead))
+      position += bytesRead
+    }
+    return hash.digest("hex")
+  } finally {
+    fs.closeSync(handle)
   }
 }
 
