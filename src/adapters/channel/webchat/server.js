@@ -91,7 +91,10 @@ function createWebChatServer({ config, app, adapter }) {
       adapter.subscribe(response, {
         senderId: identity.senderId,
         threadId: url.searchParams.get("threadId") || "",
-        after: url.searchParams.get("after") || request.headers["last-event-id"] || 0,
+        after: resolveEventAfter(
+          url.searchParams.get("after"),
+          request.headers["last-event-id"],
+        ),
         clientId: url.searchParams.get("clientId") || "",
       });
       return;
@@ -299,4 +302,13 @@ function normalizeText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-module.exports = { createWebChatServer };
+function resolveEventAfter(queryAfter, lastEventId) {
+  const queryCursor = Number(queryAfter);
+  const reconnectCursor = Number(lastEventId);
+  return Math.max(
+    Number.isFinite(queryCursor) && queryCursor >= 0 ? queryCursor : 0,
+    Number.isFinite(reconnectCursor) && reconnectCursor >= 0 ? reconnectCursor : 0,
+  );
+}
+
+module.exports = { createWebChatServer, resolveEventAfter };

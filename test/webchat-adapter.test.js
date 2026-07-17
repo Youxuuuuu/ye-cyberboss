@@ -101,6 +101,48 @@ test("webchat messages preserve canonical user and assistant identities", async 
   assert.equal(assistant.record.id, "web-assistant-item-identity-1");
 });
 
+test("status cursor closes the snapshot-to-subscribe event gap without replaying history", () => {
+  const adapter = createWebChatChannelAdapter({
+    config: {
+      stateDir: fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-webchat-cursor-")),
+      webChatSenderId: "user-cursor",
+      allowedUserIds: ["user-cursor"],
+      webChatEnabled: true,
+    },
+  });
+  const historical = adapter.publish({
+    kind: "message",
+    senderId: "user-cursor",
+    threadId: "thread-cursor",
+    record: { id: "historical" },
+  });
+  const statusSnapshotCursor = adapter.getEventCursor({
+    senderId: "user-cursor",
+    threadId: "thread-cursor",
+  });
+  assert.equal(statusSnapshotCursor, historical.cursor);
+
+  const gapEvent = adapter.publish({
+    kind: "message",
+    senderId: "user-cursor",
+    threadId: "thread-cursor",
+    record: { id: "created-after-status" },
+  });
+  const response = createResponse();
+  adapter.subscribe(response, {
+    senderId: "user-cursor",
+    threadId: "thread-cursor",
+    after: statusSnapshotCursor,
+    clientId: "client-cursor",
+  });
+
+  const body = response.writes.join("");
+  assert.equal(body.includes('"id":"historical"'), false);
+  assert.equal(body.includes('"id":"created-after-status"'), true);
+  assert.equal(body.includes(`id: ${gapEvent.cursor}`), true);
+  response.close();
+});
+
 test("webchat upload returns an inbox media reference", async () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-webchat-upload-"));
   const adapter = createWebChatChannelAdapter({

@@ -413,6 +413,9 @@ function createWebChatChannelAdapter({ config }) {
       const cursor = Number(after);
       return eventLog.filter((event) => Number.isFinite(cursor) && event.cursor > cursor);
     },
+    getEventCursor() {
+      return nextCursor;
+    },
     sendText,
     sendTyping,
     sendFile,

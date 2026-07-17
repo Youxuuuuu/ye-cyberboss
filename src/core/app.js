@@ -307,6 +307,10 @@ class CyberbossApp {
       usage: contextUsage || null,
       pendingApproval: threadState?.pendingApproval || null,
       webClients: this.webChatAdapter.getClientCount(),
+      eventCursor: this.webChatAdapter.getEventCursor({
+        senderId: context.senderId,
+        threadId: selectedThreadId,
+      }),
     };
   }
 
