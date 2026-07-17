@@ -86,6 +86,7 @@ test("web reply delivery carries runtime item identity to the channel", async ()
     threadId: "thread-web",
     turnId: "turn-web",
     itemId: "item-web",
+    transportTurnId: "turn-web",
   }]);
 });
 
@@ -106,6 +107,57 @@ test("result-only web delivery keeps the native assistant item identity", async 
 
   assert.equal(sent.length, 1);
   assert.equal(sent[0].itemId, "claude:msg-native-1:2");
+});
+
+test("web delivery retains logical display identity after transport correlation", async () => {
+  const { sent, streamDelivery } = createHarness();
+  streamDelivery.queueReplyTargetForThread("thread-correlated", {
+    userId: "user-correlated",
+    contextToken: "web:client-correlated",
+    provider: "web",
+  });
+
+  await streamDelivery.handleRuntimeEvent({
+    type: "runtime.turn.started",
+    payload: {
+      threadId: "thread-correlated",
+      turnId: "turn-transport",
+      requestId: "request-correlated",
+      messageId: "message-correlated",
+      logicalTurnId: "web:request-correlated",
+      displayTurnId: "web:request-correlated",
+      transportTurnId: "turn-transport",
+    },
+  });
+  await streamDelivery.handleRuntimeEvent({
+    type: "runtime.turn.correlated",
+    payload: {
+      threadId: "thread-correlated",
+      requestId: "request-correlated",
+      messageId: "message-correlated",
+      logicalTurnId: "web:request-correlated",
+      displayTurnId: "web:request-correlated",
+      transportTurnId: "turn-transport",
+      canonicalTurnId: "prompt-canonical",
+    },
+  });
+  await streamDelivery.handleRuntimeEvent({
+    type: "runtime.turn.completed",
+    payload: {
+      threadId: "thread-correlated",
+      turnId: "turn-transport",
+      itemId: "claude:msg-native:0",
+      text: "final answer",
+    },
+  });
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].requestId, "request-correlated");
+  assert.equal(sent[0].messageId, "message-correlated");
+  assert.equal(sent[0].logicalTurnId, "web:request-correlated");
+  assert.equal(sent[0].displayTurnId, "web:request-correlated");
+  assert.equal(sent[0].transportTurnId, "turn-transport");
+  assert.equal(sent[0].canonicalTurnId, "prompt-canonical");
 });
 
 test("system silent JSON is suppressed", async () => {

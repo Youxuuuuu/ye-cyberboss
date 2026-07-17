@@ -109,15 +109,25 @@ class StreamDelivery {
       return;
     }
 
+    if (event.type === "runtime.turn.correlated") {
+      const transportTurnId = normalizeText(event.payload.transportTurnId || turnId);
+      if (!transportTurnId) return;
+      const state = this.ensureRunState(threadId, transportTurnId);
+      this.applyTurnIdentity(state, event.payload);
+      return;
+    }
+
     switch (event.type) {
       case "runtime.turn.started": {
         const state = this.ensureRunState(threadId, turnId);
         state.turnId = turnId || state.turnId;
+        this.applyTurnIdentity(state, event.payload);
         this.attachReplyTarget(state);
         return;
       }
       case "runtime.reply.delta": {
         const state = this.ensureRunState(threadId, turnId);
+        this.applyTurnIdentity(state, event.payload);
         this.upsertItem(state, {
           itemId: normalizeText(event.payload.itemId) || `item-${state.itemOrder.length + 1}`,
           text: normalizeLineEndings(event.payload.text),
@@ -127,6 +137,7 @@ class StreamDelivery {
       }
       case "runtime.reply.completed": {
         const state = this.ensureRunState(threadId, turnId);
+        this.applyTurnIdentity(state, event.payload);
         this.upsertItem(state, {
           itemId: normalizeText(event.payload.itemId) || `item-${state.itemOrder.length + 1}`,
           text: normalizeLineEndings(event.payload.text),
@@ -138,6 +149,7 @@ class StreamDelivery {
       case "runtime.turn.completed": {
         const state = this.ensureRunState(threadId, turnId);
         state.turnId = turnId || state.turnId;
+        this.applyTurnIdentity(state, event.payload);
         this.captureTurnCompletionText(state, event.payload.text, event.payload.itemId);
         await this.flush(state, { force: true });
         this.disposeRunState(state.runKey);
@@ -165,6 +177,12 @@ class StreamDelivery {
       replyTarget: null,
       deferredReplyPrefix: "",
       turnId: normalizeText(turnId),
+      requestId: "",
+      messageId: "",
+      logicalTurnId: "",
+      displayTurnId: "",
+      transportTurnId: normalizeText(turnId),
+      canonicalTurnId: "",
       itemOrder: [],
       items: new Map(),
       sentItemIds: new Set(),
@@ -176,6 +194,43 @@ class StreamDelivery {
     this.stateByRunKey.set(runKey, created);
     this.attachReplyTarget(created);
     return created;
+  }
+
+  applyTurnIdentity(state, payload = {}) {
+    if (!state || !payload || typeof payload !== "object") return;
+    const keys = [
+      "requestId",
+      "messageId",
+      "logicalTurnId",
+      "displayTurnId",
+      "transportTurnId",
+      "canonicalTurnId",
+    ];
+    for (const key of keys) {
+      const value = normalizeText(payload[key]);
+      if (value) state[key] = value;
+    }
+    if (!state.displayTurnId && state.logicalTurnId) {
+      state.displayTurnId = state.logicalTurnId;
+    }
+    if (!state.transportTurnId) {
+      state.transportTurnId = state.turnId;
+    }
+  }
+
+  copyTurnIdentity(target, source = {}) {
+    if (!target || !source || typeof source !== "object") return;
+    for (const key of [
+      "requestId",
+      "messageId",
+      "logicalTurnId",
+      "displayTurnId",
+      "transportTurnId",
+      "canonicalTurnId",
+    ]) {
+      const value = normalizeText(source[key]);
+      if (value) target[key] = value;
+    }
   }
 
   attachReplyTarget(state) {
@@ -380,6 +435,7 @@ class StreamDelivery {
       payload.threadId = state.threadId;
       payload.turnId = state.turnId;
       payload.itemId = delivery.itemId;
+      this.copyTurnIdentity(payload, state);
     }
     if (prependDeferredPrefix) {
       payload.preserveBlock = true;
@@ -430,6 +486,7 @@ class StreamDelivery {
           retryPayload.threadId = payload.threadId;
           retryPayload.turnId = payload.turnId;
           retryPayload.itemId = payload.itemId;
+          this.copyTurnIdentity(retryPayload, payload);
         }
         if (payload.preserveBlock) {
           retryPayload.preserveBlock = true;

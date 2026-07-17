@@ -351,6 +351,30 @@ class ConversationArchive {
     return next
   }
 
+  decorateWebTurnRecord(record) {
+    const threadId = normalizeText(record?.threadId)
+    const canonicalTurnId = normalizeText(record?.turnId)
+    if (!threadId || !canonicalTurnId) return record
+    const entry = this.webTurnByCanonicalKey.get(
+      buildWebCanonicalTurnKey(threadId, canonicalTurnId),
+    )
+    if (!entry) return record
+    return {
+      ...record,
+      meta: {
+        ...(record.meta || {}),
+        ...(entry.requestId ? { requestId: entry.requestId } : {}),
+        ...(entry.messageId ? { requestMessageId: entry.messageId } : {}),
+        ...(entry.logicalTurnId ? {
+          logicalTurnId: entry.logicalTurnId,
+          displayTurnId: entry.displayTurnId || entry.logicalTurnId,
+        } : {}),
+        ...(entry.transportTurnId ? { transportTurnId: entry.transportTurnId } : {}),
+        ...(entry.canonicalTurnId ? { canonicalTurnId: entry.canonicalTurnId } : {}),
+      },
+    }
+  }
+
   reconcileRawWebUser(record) {
     const threadId = normalizeText(record?.threadId)
     const canonicalTurnId = normalizeText(record?.turnId)
@@ -631,6 +655,7 @@ class ConversationArchive {
     const mergedRecords = parsedRecords
       .map((record) => this.mergePendingInboundRecord(record, mode))
       .filter(Boolean)
+      .map((record) => this.decorateWebTurnRecord(record))
     const records = mergedRecords.filter((record) => !this.shouldDropRealtimeRecord(record, mode))
     this.updateLastTimestamp(parserKey, records)
     if (deferWrite) {

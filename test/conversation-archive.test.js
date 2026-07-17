@@ -100,6 +100,23 @@ test("raw Claude user correlates into the existing web user without a second rec
     sourceLine: 1,
     workspaceRoot: WORKSPACE_ROOT,
   })
+
+  archive.ingestRealtimeSessionLine({
+    runtimeId: "claudecode",
+    raw: claudeAssistant(
+      "thread-correlation-1",
+      "assistant-correlation-1",
+      "user-correlation-1",
+      [
+        { type: "thinking", thinking: "stable thought" },
+        { type: "text", text: "stable answer" },
+      ],
+      "2026-07-18T00:00:02.000Z",
+    ),
+    sourceFile: path.join(stateDir, "claude-correlation.jsonl"),
+    sourceLine: 2,
+    workspaceRoot: WORKSPACE_ROOT,
+  })
   archive.ingestRealtimeSessionLine({
     runtimeId: "claudecode",
     raw: rawUser,
@@ -120,6 +137,17 @@ test("raw Claude user correlates into the existing web user without a second rec
   assert.equal(users[0].meta.transportTurnId, "transport-correlation-1")
   assert.equal(users[0].meta.canonicalTurnId, "prompt-correlation-1")
   assert.equal(users[0].meta.bubbleSegments.length, 3)
+  const turnRecords = records.filter((record) => (
+    record.type === "thinking" || record.type === "assistant"
+  ))
+  assert.equal(turnRecords.length, 2)
+  for (const record of turnRecords) {
+    assert.equal(record.meta.requestId, "request-correlation-1")
+    assert.equal(record.meta.logicalTurnId, "web:request-correlation-1")
+    assert.equal(record.meta.displayTurnId, "web:request-correlation-1")
+    assert.equal(record.meta.transportTurnId, "transport-correlation-1")
+    assert.equal(record.meta.canonicalTurnId, "prompt-correlation-1")
+  }
 })
 
 test("codex import normalizes short operation text, media, prompts, and source lines", () => {

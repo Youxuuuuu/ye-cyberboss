@@ -89,8 +89,14 @@ test("webchat messages preserve canonical user and assistant identities", async 
   await adapter.sendText({
     userId: "user-identity",
     threadId: "thread-identity",
-    turnId: "turn-identity",
+    turnId: "turn-transport-identity",
     itemId: "item-identity-1",
+    requestId: "request-identity-1",
+    messageId: "message-identity-1",
+    logicalTurnId: "web:request-identity-1",
+    displayTurnId: "web:request-identity-1",
+    transportTurnId: "turn-transport-identity",
+    canonicalTurnId: "prompt-canonical-identity",
     text: "reply",
   });
   const assistant = adapter.getRecentEvents(inbound.cursor)
@@ -99,6 +105,57 @@ test("webchat messages preserve canonical user and assistant identities", async 
   assert.equal(assistant.record.itemId, "item-identity-1");
   assert.equal(assistant.record.meta.itemId, "item-identity-1");
   assert.equal(assistant.record.id, "web-assistant-item-identity-1");
+  assert.equal(assistant.protocolVersion, 2);
+  assert.equal(assistant.displayTurnId, "web:request-identity-1");
+  assert.equal(assistant.record.meta.requestId, "request-identity-1");
+  assert.equal(assistant.record.meta.logicalTurnId, "web:request-identity-1");
+  assert.equal(assistant.record.meta.displayTurnId, "web:request-identity-1");
+  assert.equal(assistant.record.meta.transportTurnId, "turn-transport-identity");
+  assert.equal(assistant.record.meta.canonicalTurnId, "prompt-canonical-identity");
+});
+
+test("runtime correlation events expose protocol-v2 turn identities", () => {
+  const adapter = createWebChatChannelAdapter({
+    config: {
+      stateDir: fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-webchat-turn-identity-")),
+      webChatSenderId: "user-turn",
+      allowedUserIds: ["user-turn"],
+      webChatEnabled: true,
+    },
+  });
+
+  const started = adapter.publishRuntimeEvent({
+    type: "runtime.turn.started",
+    payload: {
+      threadId: "thread-turn",
+      turnId: "turn-transport",
+      requestId: "request-turn",
+      messageId: "message-turn",
+      logicalTurnId: "web:request-turn",
+      displayTurnId: "web:request-turn",
+      transportTurnId: "turn-transport",
+    },
+  });
+  const correlated = adapter.publishRuntimeEvent({
+    type: "runtime.turn.correlated",
+    payload: {
+      threadId: "thread-turn",
+      requestId: "request-turn",
+      messageId: "message-turn",
+      logicalTurnId: "web:request-turn",
+      displayTurnId: "web:request-turn",
+      transportTurnId: "turn-transport",
+      canonicalTurnId: "prompt-canonical",
+    },
+  });
+
+  assert.equal(started.protocolVersion, 2);
+  assert.equal(started.kind, "turn.started");
+  assert.equal(started.displayTurnId, "web:request-turn");
+  assert.equal(correlated.protocolVersion, 2);
+  assert.equal(correlated.kind, "turn.correlated");
+  assert.equal(correlated.transportTurnId, "turn-transport");
+  assert.equal(correlated.canonicalTurnId, "prompt-canonical");
 });
 
 test("status cursor closes the snapshot-to-subscribe event gap without replaying history", () => {

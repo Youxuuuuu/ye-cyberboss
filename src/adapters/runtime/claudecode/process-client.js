@@ -208,6 +208,11 @@ class ClaudeCodeProcessClient {
     const containsToolResult = Array.isArray(content)
       && content.some((item) => item?.type === "tool_result");
     if (canonicalTurnId && this.pendingTurnContext?.requestId && !containsToolResult) {
+      this.pendingTurnContext = {
+        ...this.pendingTurnContext,
+        canonicalTurnId,
+        transportTurnId: this.pendingTurnId,
+      };
       this.emit({
         type: "turn.correlated",
         sessionId: normalizeSessionId(raw?.sessionId || raw?.session_id)
@@ -249,6 +254,8 @@ class ClaudeCodeProcessClient {
       type: "turn.completed",
       turnId: this.pendingTurnId,
       sessionId: this.activeThreadId || this.sessionId,
+      ...(this.pendingTurnContext || {}),
+      transportTurnId: this.pendingTurnContext?.transportTurnId || this.pendingTurnId,
       itemId: this.pendingReplyItemId,
       text: typeof raw.result === "string" ? raw.result.trim() : "",
     }, raw);

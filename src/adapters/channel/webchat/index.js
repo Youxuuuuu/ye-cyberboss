@@ -4,6 +4,7 @@ const path = require("path");
 
 const MAX_EVENT_LOG_SIZE = 2_000;
 const MAX_UPLOAD_FILE_NAME_LENGTH = 120;
+const WEB_CHAT_EVENT_PROTOCOL_VERSION = 2;
 
 function createWebChatChannelAdapter({ config }) {
   const clients = new Set();
@@ -28,6 +29,7 @@ function createWebChatChannelAdapter({ config }) {
       senderId: normalizeSenderId(event.senderId),
       threadId: normalizeText(event.threadId),
       ...event,
+      protocolVersion: WEB_CHAT_EVENT_PROTOCOL_VERSION,
       cursor,
     };
   }
@@ -164,6 +166,13 @@ function createWebChatChannelAdapter({ config }) {
     const visibleText = quote
       ? text.replace(/^\[Quoted:\s*[^\]]+\]\s*\r?\n/i, "").trim()
       : text;
+    const turnIdentity = normalizeTurnIdentity({
+      requestId: prepared.requestId,
+      messageId: prepared.messageId,
+      logicalTurnId: prepared.logicalTurnId,
+      displayTurnId: prepared.logicalTurnId,
+      transportTurnId: turnId,
+    });
     const record = {
       id: `web-inbound-${normalizeText(prepared.messageId) || crypto.randomUUID()}`,
       messageId: normalizeText(prepared.messageId),
@@ -176,7 +185,7 @@ function createWebChatChannelAdapter({ config }) {
       meta: {
         messageId: normalizeText(prepared.messageId),
         ...(normalizeText(prepared.requestId) ? { requestId: normalizeText(prepared.requestId) } : {}),
-        ...(normalizeText(prepared.logicalTurnId) ? { logicalTurnId: normalizeText(prepared.logicalTurnId) } : {}),
+        ...turnIdentity,
         ...(bubbleSegments.length ? { bubbleSegments } : {}),
         sourceKey: `web|message|${normalizeText(prepared.messageId)}`,
         ...(quote ? { quote } : {}),
@@ -192,13 +201,15 @@ function createWebChatChannelAdapter({ config }) {
       senderId: prepared.senderId,
       threadId: record.threadId,
       turnId: record.turnId,
+      ...turnIdentity,
       record,
     });
   }
 
   function publishRuntimeEvent(event) {
     const threadId = normalizeText(event?.payload?.threadId);
-    const turnId = normalizeText(event?.payload?.turnId);
+    const turnId = normalizeText(event?.payload?.turnId || event?.payload?.transportTurnId);
+    const turnIdentity = normalizeTurnIdentity(event?.payload);
     const senderId = resolveSenderIdForThread(threadId);
     if (!event?.type) return null;
 
@@ -208,6 +219,7 @@ function createWebChatChannelAdapter({ config }) {
         senderId,
         threadId,
         turnId,
+        ...turnIdentity,
         usage: event.payload,
       });
     }
@@ -218,6 +230,7 @@ function createWebChatChannelAdapter({ config }) {
         senderId,
         threadId,
         turnId,
+        ...turnIdentity,
         itemId: normalizeText(event.payload.itemId),
         text: normalizeText(event.payload.text),
       });
@@ -229,17 +242,22 @@ function createWebChatChannelAdapter({ config }) {
         senderId,
         threadId,
         turnId,
+        ...turnIdentity,
         itemId: normalizeText(event.payload.itemId),
         text: normalizeText(event.payload.text),
       });
     }
 
     if (event.type === "runtime.turn.started") {
-      return publish({ kind: "turn.started", senderId, threadId, turnId });
+      return publish({ kind: "turn.started", senderId, threadId, turnId, ...turnIdentity });
+    }
+
+    if (event.type === "runtime.turn.correlated") {
+      return publish({ kind: "turn.correlated", senderId, threadId, turnId, ...turnIdentity });
     }
 
     if (event.type === "runtime.turn.completed") {
-      return publish({ kind: "turn.completed", senderId, threadId, turnId });
+      return publish({ kind: "turn.completed", senderId, threadId, turnId, ...turnIdentity });
     }
 
     if (event.type === "runtime.turn.failed") {
@@ -248,6 +266,7 @@ function createWebChatChannelAdapter({ config }) {
         senderId,
         threadId,
         turnId,
+        ...turnIdentity,
         text: normalizeText(event.payload.text) || "执行失败",
       });
     }
@@ -258,6 +277,7 @@ function createWebChatChannelAdapter({ config }) {
         senderId,
         threadId,
         turnId,
+        ...turnIdentity,
         approval: event.payload,
       });
     }
@@ -275,7 +295,19 @@ function createWebChatChannelAdapter({ config }) {
     return normalizeSenderId(config.webChatSenderId) || normalizeSenderId(config.allowedUserIds?.[0]);
   }
 
-  function sendText({ userId, text, threadId = "", turnId = "", itemId = "", messageId = "" } = {}) {
+  function sendText({
+    userId,
+    text,
+    threadId = "",
+    turnId = "",
+    itemId = "",
+    messageId = "",
+    requestId = "",
+    logicalTurnId = "",
+    displayTurnId = "",
+    transportTurnId = "",
+    canonicalTurnId = "",
+  } = {}) {
     const normalizedText = String(text || "").trim();
     if (!normalizedText) return Promise.resolve();
     const quote = extractQuoteText(normalizedText);
@@ -283,6 +315,14 @@ function createWebChatChannelAdapter({ config }) {
       ? normalizedText.replace(/^\[Quoted:\s*[^\]]+\]\s*\r?\n/i, "").trim()
       : normalizedText;
     const stableItemId = normalizeText(itemId) || normalizeText(messageId) || crypto.randomUUID();
+    const turnIdentity = normalizeTurnIdentity({
+      requestId,
+      messageId,
+      logicalTurnId,
+      displayTurnId,
+      transportTurnId: transportTurnId || turnId,
+      canonicalTurnId,
+    });
     const record = {
       id: `web-assistant-${stableItemId}`,
       itemId: stableItemId,
@@ -294,6 +334,7 @@ function createWebChatChannelAdapter({ config }) {
       text: visibleText,
       meta: {
         itemId: stableItemId,
+        ...turnIdentity,
         sourceKey: ["web", normalizeText(threadId), normalizeText(turnId), stableItemId, "assistant"].filter(Boolean).join("|"),
         ...(quote ? { quote } : {}),
         ephemeral: true,
@@ -307,6 +348,7 @@ function createWebChatChannelAdapter({ config }) {
       threadId: record.threadId,
       turnId: record.turnId,
       itemId: stableItemId,
+      ...turnIdentity,
       record,
     });
     return Promise.resolve();
@@ -323,13 +365,34 @@ function createWebChatChannelAdapter({ config }) {
     return Promise.resolve();
   }
 
-  function sendFile({ userId, filePath, threadId = "", turnId = "", itemId = "", messageId = "", file = null } = {}) {
+  function sendFile({
+    userId,
+    filePath,
+    threadId = "",
+    turnId = "",
+    itemId = "",
+    messageId = "",
+    requestId = "",
+    logicalTurnId = "",
+    displayTurnId = "",
+    transportTurnId = "",
+    canonicalTurnId = "",
+    file = null,
+  } = {}) {
     const media = file || {
       kind: inferKindFromFilePath(filePath),
       fileName: path.basename(String(filePath || "")),
       path: filePath,
     };
     const stableItemId = normalizeText(itemId) || normalizeText(messageId) || crypto.randomUUID();
+    const turnIdentity = normalizeTurnIdentity({
+      requestId,
+      messageId,
+      logicalTurnId,
+      displayTurnId,
+      transportTurnId: transportTurnId || turnId,
+      canonicalTurnId,
+    });
     const record = {
       id: `web-assistant-file-${stableItemId}`,
       itemId: stableItemId,
@@ -341,6 +404,7 @@ function createWebChatChannelAdapter({ config }) {
       text: "",
       meta: {
         itemId: stableItemId,
+        ...turnIdentity,
         sourceKey: ["web", normalizeText(threadId), normalizeText(turnId), stableItemId, "assistant"].filter(Boolean).join("|"),
         files: [media],
         ephemeral: true,
@@ -354,6 +418,7 @@ function createWebChatChannelAdapter({ config }) {
       threadId: record.threadId,
       turnId: record.turnId,
       itemId: stableItemId,
+      ...turnIdentity,
       record,
     });
     return Promise.resolve({ filePath });
@@ -443,6 +508,23 @@ function normalizeBubbleSegments(segments = []) {
         : {}),
     }))
     .filter((segment) => segment.segmentId);
+}
+
+function normalizeTurnIdentity(identity = {}) {
+  const requestId = normalizeString(identity.requestId);
+  const messageId = normalizeString(identity.messageId);
+  const logicalTurnId = normalizeString(identity.logicalTurnId);
+  const displayTurnId = normalizeString(identity.displayTurnId) || logicalTurnId;
+  const transportTurnId = normalizeString(identity.transportTurnId);
+  const canonicalTurnId = normalizeString(identity.canonicalTurnId);
+  return {
+    ...(requestId ? { requestId } : {}),
+    ...(messageId ? { messageId } : {}),
+    ...(logicalTurnId ? { logicalTurnId } : {}),
+    ...(displayTurnId ? { displayTurnId } : {}),
+    ...(transportTurnId ? { transportTurnId } : {}),
+    ...(canonicalTurnId ? { canonicalTurnId } : {}),
+  };
 }
 
 function normalizeString(value) {
