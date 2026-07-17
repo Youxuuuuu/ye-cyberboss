@@ -13,7 +13,7 @@ const { ConversationSourceLineResolver } = require("../src/core/conversation/sou
 
 const WORKSPACE_ROOT = "D:\\study\\cyberboss"
 
-test("web inbound batch writes one canonical record per messageId", () => {
+test("merged web inbound writes one canonical logical record with bubble segments", () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-web-identity-"))
   const archive = new ConversationArchive({
     config: {
@@ -22,37 +22,37 @@ test("web inbound batch writes one canonical record per messageId", () => {
     },
   })
 
-  const result = archive.recordWebInboundBatch([
-    {
-      provider: "web",
-      senderId: "user-1",
-      messageId: "message-web-1",
-      originalText: "first",
-      receivedAt: "2026-07-17T00:00:00.000Z",
-      attachments: [],
-    },
-    {
-      provider: "web",
-      senderId: "user-1",
-      messageId: "message-web-2",
-      originalText: "second",
-      receivedAt: "2026-07-17T00:00:01.000Z",
-      attachments: [],
-    },
-  ], {
+  const result = archive.recordMergedWebInbound({
+    provider: "web",
+    senderId: "user-1",
+    requestId: "request-web-1",
+    messageId: "message-web-1",
+    logicalTurnId: "web:request-web-1",
+    originalText: "first\n\nsecond",
+    receivedAt: "2026-07-17T00:00:00.000Z",
+    attachments: [],
+    bubbleSegments: [
+      { segmentId: "segment-web-1", text: "first" },
+      { segmentId: "segment-web-2", text: "second" },
+    ],
+  }, {
     runtimeId: "claudecode",
     threadId: "thread-web",
     turnId: "turn-web",
     workspaceRoot: WORKSPACE_ROOT,
   })
 
-  assert.equal(result.writtenCount, 2)
+  assert.equal(result.writtenCount, 1)
   const records = readConversationDay(stateDir, "2026-07-17")
-  assert.deepEqual(records.map((record) => record.messageId), ["message-web-1", "message-web-2"])
-  assert.deepEqual(records.map((record) => record.sourceKey), [
-    "web|message|message-web-1",
-    "web|message|message-web-2",
-  ])
+  assert.equal(records.length, 1)
+  assert.equal(records[0].messageId, "message-web-1")
+  assert.equal(records[0].sourceKey, "web|message|message-web-1")
+  assert.equal(records[0].meta.requestId, "request-web-1")
+  assert.equal(records[0].meta.logicalTurnId, "web:request-web-1")
+  assert.deepEqual(
+    records[0].meta.bubbleSegments.map((segment) => segment.segmentId),
+    ["segment-web-1", "segment-web-2"],
+  )
   assert.ok(records.every((record) => record.threadId === "thread-web" && record.turnId === "turn-web"))
 })
 

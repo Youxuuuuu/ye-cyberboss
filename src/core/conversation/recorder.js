@@ -172,42 +172,69 @@ class ConversationArchive {
     return { writtenCount: 0, warnings: [] }
   }
 
+  recordMergedWebInbound(prepared = {}, context = {}) {
+    const messageId = normalizeText(prepared.messageId)
+    if (!messageId) {
+      throw new Error("merged web inbound requires messageId")
+    }
+    const requestId = normalizeText(prepared.requestId)
+    const logicalTurnId = normalizeText(prepared.logicalTurnId)
+      || (requestId ? `web:${requestId}` : "")
+    const bubbleSegments = normalizeWebBubbleSegments(prepared.bubbleSegments)
+    const quote = extractQuote(prepared.originalText || prepared.text || "")
+    const displayText = bubbleSegments
+      .map((segment) => normalizeText(segment.text))
+      .filter(Boolean)
+      .join("\n\n") || quote.text
+    const attachments = normalizeMediaList(prepared.attachments, {
+      workspaceRoot: context.workspaceRoot,
+      stateDir: this.config.stateDir,
+    })
+    const record = normalizeConversationRecord({
+      id: `web-user-${messageId}`,
+      messageId,
+      type: "user",
+      timestamp: prepared.receivedAt || new Date().toISOString(),
+      runtimeId: normalizeText(context.runtimeId),
+      threadId: normalizeText(context.threadId),
+      turnId: normalizeText(context.turnId),
+      workspaceRoot: normalizeText(context.workspaceRoot),
+      text: displayText,
+      meta: {
+        messageId,
+        ...(requestId ? { requestId } : {}),
+        ...(logicalTurnId ? { logicalTurnId } : {}),
+        ...(bubbleSegments.length ? { bubbleSegments } : {}),
+        ...(quote.quote && bubbleSegments.length <= 1 ? { quote: quote.quote } : {}),
+        attachments: attachments.filter((item) => item.kind !== "file"),
+        files: attachments.filter((item) => item.kind === "file"),
+        stickers: attachments.filter((item) => item.kind === "sticker"),
+      },
+      source: {
+        provider: "web",
+        sourceType: "web.message.user",
+        rawId: messageId,
+        sourceKey: `web|message|${messageId}`,
+      },
+    })
+    return this.writer.writeRecords([record])
+  }
+
   recordWebInboundBatch(messages = [], context = {}) {
-    const records = (Array.isArray(messages) ? messages : [])
-      .filter((message) => message && normalizeText(message.messageId))
-      .map((message) => {
-        const messageId = normalizeText(message.messageId)
-        const quote = extractQuote(message.originalText || message.text || "")
-        const attachments = normalizeMediaList(message.attachments, {
-          workspaceRoot: context.workspaceRoot,
-          stateDir: this.config.stateDir,
-        })
-        return normalizeConversationRecord({
-          id: `web-user-${messageId}`,
-          messageId,
-          type: "user",
-          timestamp: message.receivedAt || new Date().toISOString(),
-          runtimeId: normalizeText(context.runtimeId),
-          threadId: normalizeText(context.threadId),
-          turnId: normalizeText(context.turnId),
-          workspaceRoot: normalizeText(context.workspaceRoot),
-          text: quote.text,
-          meta: {
-            messageId,
-            ...(quote.quote ? { quote: quote.quote } : {}),
-            attachments: attachments.filter((item) => item.kind !== "file"),
-            files: attachments.filter((item) => item.kind === "file"),
-            stickers: attachments.filter((item) => item.kind === "sticker"),
-          },
-          source: {
-            provider: "web",
-            sourceType: "web.message.user",
-            rawId: messageId,
-            sourceKey: `web|message|${messageId}`,
-          },
-        })
-      })
-    return this.writer.writeRecords(records)
+    const sourceMessages = (Array.isArray(messages) ? messages : []).filter(Boolean)
+    const latest = sourceMessages[sourceMessages.length - 1] || {}
+    return this.recordMergedWebInbound({
+      ...latest,
+      messageId: normalizeText(context.messageId || latest.messageId),
+      originalText: sourceMessages
+        .map((message) => normalizeText(message.originalText || message.text))
+        .filter(Boolean)
+        .join("\n\n"),
+      bubbleSegments: sourceMessages.map((message) => ({
+        segmentId: normalizeText(message.segmentId || message.messageId),
+        text: normalizeText(message.originalText || message.text),
+      })),
+    }, context)
   }
 
   registerRealtimeSource({ runtimeId = "", threadId = "", workspaceRoot = "", sourceFile = "" } = {}) {
@@ -799,4 +826,18 @@ function normalizeText(value) {
 
 module.exports = {
   ConversationArchive,
+}
+
+function normalizeWebBubbleSegments(segments = []) {
+  return (Array.isArray(segments) ? segments : [])
+    .filter((segment) => segment && typeof segment === "object")
+    .map((segment) => ({
+      segmentId: normalizeText(segment.segmentId),
+      text: normalizeText(segment.text),
+      ...(segment.quote ? { quote: segment.quote } : {}),
+      ...(Array.isArray(segment.attachments) && segment.attachments.length
+        ? { attachments: segment.attachments }
+        : {}),
+    }))
+    .filter((segment) => segment.segmentId)
 }

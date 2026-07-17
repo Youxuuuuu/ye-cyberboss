@@ -19,6 +19,10 @@ function buildMergedInboundPrepared({
   workspaceRoot,
   messages = [],
   trailingPrepared = null,
+  requestId = "",
+  messageId = "",
+  logicalTurnId = "",
+  bubbleSegments = [],
 }) {
   const queued = Array.isArray(messages) ? messages.filter((message) => message && typeof message === "object") : [];
   const latest = trailingPrepared || queued[queued.length - 1] || {};
@@ -36,11 +40,31 @@ function buildMergedInboundPrepared({
     ...queued,
     ...(trailingPrepared && !queued.includes(trailingPrepared) ? [trailingPrepared] : []),
   ].map((message) => clonePreparedInboundMessage(message));
+  const stableRequestId = normalizeText(requestId || latest.requestId);
+  const stableMessageId = normalizeText(messageId || latest.messageId);
+  const stableLogicalTurnId = normalizeText(logicalTurnId)
+    || (stableRequestId ? `web:${stableRequestId}` : "");
+  const stableBubbleSegments = normalizeBubbleSegments(
+    Array.isArray(bubbleSegments) && bubbleSegments.length
+      ? bubbleSegments
+      : sourceMessages.map((message) => ({
+        segmentId: normalizeText(message.segmentId || message.messageId),
+        text: normalizeText(message.originalText || message.text),
+        ...(message.quote ? { quote: message.quote } : {}),
+        ...(Array.isArray(message.attachments) && message.attachments.length
+          ? { attachments: message.attachments }
+          : {}),
+      })),
+  );
 
   return {
     bindingKey,
     workspaceRoot,
     ...latest,
+    requestId: stableRequestId,
+    messageId: stableMessageId,
+    logicalTurnId: stableLogicalTurnId,
+    bubbleSegments: stableBubbleSegments,
     originalText,
     text: originalText,
     attachments,
@@ -163,6 +187,10 @@ function clonePreparedInboundMessage(prepared) {
     accountId: prepared.accountId,
     senderId: prepared.senderId,
     messageId: prepared.messageId,
+    segmentId: prepared.segmentId,
+    requestId: prepared.requestId,
+    logicalTurnId: prepared.logicalTurnId,
+    bubbleSegments: normalizeBubbleSegments(prepared.bubbleSegments),
     contextToken: prepared.contextToken,
     provider: prepared.provider,
     originalText: prepared.originalText,
@@ -171,6 +199,20 @@ function clonePreparedInboundMessage(prepared) {
     attachmentFailures: Array.isArray(prepared.attachmentFailures) ? prepared.attachmentFailures : [],
     receivedAt: prepared.receivedAt,
   };
+}
+
+function normalizeBubbleSegments(segments) {
+  return (Array.isArray(segments) ? segments : [])
+    .filter((segment) => segment && typeof segment === "object")
+    .map((segment) => ({
+      segmentId: normalizeText(segment.segmentId),
+      text: normalizeText(segment.text),
+      ...(segment.quote ? { quote: segment.quote } : {}),
+      ...(Array.isArray(segment.attachments) && segment.attachments.length
+        ? { attachments: segment.attachments }
+        : {}),
+    }))
+    .filter((segment) => segment.segmentId);
 }
 
 function isPlainTextPreparedMessage(prepared) {

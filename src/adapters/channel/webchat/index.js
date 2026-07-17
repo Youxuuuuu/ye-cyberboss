@@ -157,7 +157,9 @@ function createWebChatChannelAdapter({ config }) {
 
   function publishInbound({ prepared, threadId = "", turnId = "" } = {}) {
     if (!prepared) return null;
-    const text = normalizeText(prepared.originalText || prepared.text);
+    const bubbleSegments = normalizeBubbleSegments(prepared.bubbleSegments);
+    const text = bubbleSegments.map((segment) => segment.text).filter(Boolean).join("\n\n")
+      || normalizeText(prepared.originalText || prepared.text);
     const quote = extractQuoteText(text);
     const visibleText = quote
       ? text.replace(/^\[Quoted:\s*[^\]]+\]\s*\r?\n/i, "").trim()
@@ -173,6 +175,9 @@ function createWebChatChannelAdapter({ config }) {
       text: visibleText,
       meta: {
         messageId: normalizeText(prepared.messageId),
+        ...(normalizeText(prepared.requestId) ? { requestId: normalizeText(prepared.requestId) } : {}),
+        ...(normalizeText(prepared.logicalTurnId) ? { logicalTurnId: normalizeText(prepared.logicalTurnId) } : {}),
+        ...(bubbleSegments.length ? { bubbleSegments } : {}),
         sourceKey: `web|message|${normalizeText(prepared.messageId)}`,
         ...(quote ? { quote } : {}),
         ...(Array.isArray(prepared.attachments) && prepared.attachments.length
@@ -424,6 +429,24 @@ function createWebChatChannelAdapter({ config }) {
       return clients.size;
     },
   };
+}
+
+function normalizeBubbleSegments(segments = []) {
+  return (Array.isArray(segments) ? segments : [])
+    .filter((segment) => segment && typeof segment === "object")
+    .map((segment) => ({
+      segmentId: normalizeString(segment.segmentId),
+      text: normalizeString(segment.text),
+      ...(segment.quote ? { quote: segment.quote } : {}),
+      ...(Array.isArray(segment.attachments) && segment.attachments.length
+        ? { attachments: segment.attachments }
+        : {}),
+    }))
+    .filter((segment) => segment.segmentId);
+}
+
+function normalizeString(value) {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function extractQuoteText(text) {

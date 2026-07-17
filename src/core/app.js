@@ -5,6 +5,7 @@ const fs = require("fs");
 const { createWeixinChannelAdapter } = require("../adapters/channel/weixin");
 const { createWebChatChannelAdapter } = require("../adapters/channel/webchat");
 const { createWebChatServer } = require("../adapters/channel/webchat/server");
+const { normalizeWebChatSendContract } = require("../adapters/channel/webchat/contract");
 const { createChannelRouter } = require("../adapters/channel/router");
 const { DEFAULT_MIN_WEIXIN_CHUNK, MAX_MIN_WEIXIN_CHUNK } = require("../adapters/channel/weixin/config-store");
 const { persistIncomingWeixinAttachments } = require("../adapters/channel/weixin/media-receive");
@@ -404,6 +405,9 @@ class CyberbossApp {
     newThread = false,
     model = "",
     modelProvider = "",
+    requestId = "",
+    batchId = "",
+    messageId = "",
     messages = [],
     text = "",
   } = {}) {
@@ -436,9 +440,15 @@ class CyberbossApp {
       });
     }
 
-    const rawMessages = Array.isArray(messages) && messages.length
-      ? messages.slice(0, 64)
-      : [{ text }];
+    const sendContract = normalizeWebChatSendContract({
+      requestId,
+      batchId,
+      messageId,
+      messages: Array.isArray(messages) && messages.length
+        ? messages.slice(0, 64)
+        : [{ text }],
+    });
+    const rawMessages = sendContract.messages;
     const preparedMessages = rawMessages
       .map((message, index) => normalizeWebInboundMessage({
         message,
@@ -465,6 +475,10 @@ class CyberbossApp {
       bindingKey: context.bindingKey,
       workspaceRoot,
       messages: preparedMessages,
+      requestId: sendContract.requestId,
+      messageId: sendContract.messageId,
+      logicalTurnId: sendContract.logicalTurnId,
+      bubbleSegments: sendContract.messages[0].bubbleSegments,
     });
     const result = await this.routePreparedInbound({
       bindingKey: context.bindingKey,
@@ -474,17 +488,23 @@ class CyberbossApp {
     if (!result) {
       return {
         accepted: false,
+        status: "failed",
+        requestId: sendContract.requestId,
+        messageId: sendContract.messageId,
+        logicalTurnId: sendContract.logicalTurnId,
         threadId: currentThreadId,
         turnId: "",
       };
     }
     return {
       ...result,
+      status: "accepted",
+      requestId: sendContract.requestId,
+      messageId: sendContract.messageId,
+      logicalTurnId: sendContract.logicalTurnId,
       clientId: normalizedClientId,
-      clientMessageId: normalizeCommandArgument(preparedMessages[0]?.messageId),
-      messageIds: preparedMessages
-        .map((message) => normalizeCommandArgument(message.messageId))
-        .filter(Boolean),
+      clientMessageId: sendContract.messageId,
+      messageIds: [sendContract.messageId],
       threadId: result.threadId || currentThreadId,
     };
   }
@@ -708,7 +728,14 @@ class CyberbossApp {
   async dispatchPreparedTurn({ bindingKey, workspaceRoot, prepared }) {
     const pendingScopeKey = this.turnGateStore.begin(bindingKey, workspaceRoot);
     const currentThreadId = this.runtimeAdapter.getSessionStore().getThreadIdForWorkspace(bindingKey, workspaceRoot) || "";
-    if (prepared.provider !== "web") {
+    if (prepared.provider === "web") {
+      this.recordConversationInbound(prepared, {
+        runtimeId: this.runtimeAdapter.describe().id,
+        threadId: currentThreadId,
+        turnId: prepared.logicalTurnId || "",
+        workspaceRoot,
+      });
+    } else {
       this.recordConversationInbound(prepared, {
         runtimeId: this.runtimeAdapter.describe().id,
         threadId: currentThreadId,
@@ -771,7 +798,7 @@ class CyberbossApp {
           threadId: turn.threadId,
           turnId: turn.turnId || "",
           workspaceRoot,
-        });
+        }, { publish: false });
       }
       const replyTarget = {
         userId: prepared.senderId,
@@ -1801,24 +1828,18 @@ class CyberbossApp {
     return sessionStore.getActiveWorkspaceRoot(bindingKey) || normalizeWorkspaceRoot(this.config.workspaceRoot);
   }
 
-  recordConversationInbound(prepared, context = {}) {
+  recordConversationInbound(prepared, context = {}, { publish = true } = {}) {
     try {
-      const sourceMessages = prepared?.provider === "web" && Array.isArray(prepared?.sourceMessages)
-        ? prepared.sourceMessages
-        : [];
-      const result = sourceMessages.length && typeof this.conversationArchive?.recordWebInboundBatch === "function"
-        ? this.conversationArchive.recordWebInboundBatch(sourceMessages, context)
+      const result = prepared?.provider === "web" && typeof this.conversationArchive?.recordMergedWebInbound === "function"
+        ? this.conversationArchive.recordMergedWebInbound(prepared, context)
         : this.conversationArchive?.recordInboundMessage(prepared, context);
       this.logConversationArchiveWarnings(result?.warnings);
-      if (prepared?.provider === "web") {
-        const publishMessages = sourceMessages.length ? sourceMessages : [prepared];
-        for (const sourceMessage of publishMessages) {
-          this.webChatAdapter.publishInbound({
-            prepared: sourceMessage,
-            threadId: context.threadId || "",
-            turnId: context.turnId || "",
-          });
-        }
+      if (prepared?.provider === "web" && publish) {
+        this.webChatAdapter.publishInbound({
+          prepared,
+          threadId: context.threadId || "",
+          turnId: context.turnId || "",
+        });
       }
     } catch (error) {
       console.warn(`[cyberboss] conversation inbound archive failed: ${formatErrorMessage(error)}`);
@@ -2315,10 +2336,16 @@ function normalizeWebInboundMessage({ message, index, clientId, context, stateDi
     return null;
   }
   const rawText = normalizeText(message.text);
+  const bubbleSegments = normalizeWebBubbleSegments(message.bubbleSegments, stateDir);
   const quoteText = normalizeWebQuote(message.quote);
-  const text = quoteText
-    ? `[Quoted: ${quoteText}]\n${rawText}`.trim()
-    : rawText;
+  const text = bubbleSegments.length
+    ? bubbleSegments.map((segment) => {
+      const segmentQuote = normalizeWebQuote(segment.quote);
+      return segmentQuote
+        ? `[Quoted: ${segmentQuote}]\n${segment.text}`.trim()
+        : segment.text;
+    }).filter(Boolean).join("\n\n")
+    : (quoteText ? `[Quoted: ${quoteText}]\n${rawText}`.trim() : rawText);
   const attachments = (Array.isArray(message.attachments) ? message.attachments : [])
     .map((item) => normalizeWebAttachment(item, stateDir))
     .filter(Boolean);
@@ -2332,12 +2359,33 @@ function normalizeWebInboundMessage({ message, index, clientId, context, stateDi
     senderId: context.senderId,
     clientId,
     messageId: normalizeCommandArgument(message.messageId) || `web-${clientId}-${index}-${Date.now()}`,
+    requestId: normalizeCommandArgument(message.requestId),
+    logicalTurnId: normalizeCommandArgument(message.logicalTurnId),
+    bubbleSegments,
     contextToken: `web:${clientId}`,
     text,
     quote: quoteText,
     attachments,
     receivedAt: normalizeIsoTime(message.receivedAt) || new Date().toISOString(),
   };
+}
+
+function normalizeWebBubbleSegments(segments, stateDir) {
+  return (Array.isArray(segments) ? segments : [])
+    .filter((segment) => segment && typeof segment === "object")
+    .map((segment) => ({
+      segmentId: normalizeCommandArgument(segment.segmentId),
+      text: normalizeText(segment.text),
+      ...(segment.quote ? { quote: segment.quote } : {}),
+      ...(Array.isArray(segment.attachments) && segment.attachments.length
+        ? {
+          attachments: segment.attachments
+            .map((item) => normalizeWebAttachment(item, stateDir))
+            .filter(Boolean),
+        }
+        : {}),
+    }))
+    .filter((segment) => segment.segmentId);
 }
 
 function normalizeWebQuote(value) {

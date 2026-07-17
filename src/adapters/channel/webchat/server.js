@@ -2,9 +2,15 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const { URL } = require("url");
+const { buildWebChatRequestFingerprint, normalizeWebChatSendContract } = require("./contract");
+const { WebChatRequestLedger } = require("./request-ledger");
 
 function createWebChatServer({ config, app, adapter }) {
   let server = null;
+  const requestLedger = new WebChatRequestLedger({
+    filePath: config.webChatRequestLedgerFile
+      || path.join(path.resolve(config.stateDir || "."), "webchat-request-ledger.json"),
+  });
 
   async function start() {
     if (config.webChatEnabled === false || server) {
@@ -19,7 +25,9 @@ function createWebChatServer({ config, app, adapter }) {
           response.destroy();
           return;
         }
-        sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
+        sendJson(response, Number(error?.statusCode) || 500, {
+          error: error instanceof Error ? error.message : String(error),
+        });
       });
     });
     await new Promise((resolve, reject) => {
@@ -33,7 +41,11 @@ function createWebChatServer({ config, app, adapter }) {
       };
       server.once("error", onError);
       server.once("listening", onListening);
-      server.listen(Number(config.webChatPort) || 8791, config.webChatHost || "127.0.0.1");
+      const configuredPort = Number(config.webChatPort);
+      const port = Number.isFinite(configuredPort) && configuredPort >= 0
+        ? configuredPort
+        : 8791;
+      server.listen(port, config.webChatHost || "127.0.0.1");
     });
     return server;
   }
@@ -101,10 +113,14 @@ function createWebChatServer({ config, app, adapter }) {
     }
 
     if (request.method === "GET" && url.pathname === "/api/chat/status") {
-      sendJson(response, 200, app.getWebChatStatus({
+      const requestId = normalizeText(url.searchParams.get("requestId"));
+      sendJson(response, 200, {
+        ...app.getWebChatStatus({
         senderId: identity.senderId,
         threadId: url.searchParams.get("threadId") || "",
-      }));
+        }),
+        ...(requestId ? { sendRequest: requestLedger.get(requestId) } : {}),
+      });
       return;
     }
 
@@ -120,9 +136,19 @@ function createWebChatServer({ config, app, adapter }) {
 
     if (request.method === "POST" && url.pathname === "/api/chat/messages") {
       const body = await readJsonBody(request, requestBodyLimit(config));
-      const result = await app.handleWebChatMessages({
-        ...body,
-        senderId: identity.senderId,
+      const contract = normalizeWebChatSendContract(body);
+      const fingerprint = buildWebChatRequestFingerprint(contract, {
+        threadId: body.threadId,
+        newThread: body.newThread,
+      });
+      const result = await requestLedger.execute({
+        requestId: contract.requestId,
+        fingerprint,
+        run: () => app.handleWebChatMessages({
+          ...body,
+          ...contract,
+          senderId: identity.senderId,
+        }),
       });
       sendJson(response, 202, result);
       return;
@@ -186,7 +212,12 @@ function createWebChatServer({ config, app, adapter }) {
     fs.createReadStream(target).on("error", () => response.destroy()).pipe(response);
   }
 
-  return { start, close };
+  return {
+    start,
+    close,
+    requestLedger,
+    address() { return server?.address?.() || null; },
+  };
 }
 
 function authorize(request, url, response, configuredToken = "") {

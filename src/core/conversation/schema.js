@@ -23,6 +23,9 @@ const ALLOWED_META_KEYS = new Set([
   "visibleAs",
   "messageId",
   "itemId",
+  "requestId",
+  "logicalTurnId",
+  "bubbleSegments",
 ])
 
 const ALLOWED_SOURCE_KEYS = new Set([
