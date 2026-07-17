@@ -476,7 +476,11 @@ class CyberbossApp {
     }
     return {
       ...result,
-      clientMessageId: normalizedClientId,
+      clientId: normalizedClientId,
+      clientMessageId: normalizeCommandArgument(preparedMessages[0]?.messageId),
+      messageIds: preparedMessages
+        .map((message) => normalizeCommandArgument(message.messageId))
+        .filter(Boolean),
       threadId: result.threadId || currentThreadId,
     };
   }
@@ -700,12 +704,14 @@ class CyberbossApp {
   async dispatchPreparedTurn({ bindingKey, workspaceRoot, prepared }) {
     const pendingScopeKey = this.turnGateStore.begin(bindingKey, workspaceRoot);
     const currentThreadId = this.runtimeAdapter.getSessionStore().getThreadIdForWorkspace(bindingKey, workspaceRoot) || "";
-    this.recordConversationInbound(prepared, {
-      runtimeId: this.runtimeAdapter.describe().id,
-      threadId: currentThreadId,
-      turnId: "",
-      workspaceRoot,
-    });
+    if (prepared.provider !== "web") {
+      this.recordConversationInbound(prepared, {
+        runtimeId: this.runtimeAdapter.describe().id,
+        threadId: currentThreadId,
+        turnId: "",
+        workspaceRoot,
+      });
+    }
     await this.channelAdapter.sendTyping({
       userId: prepared.senderId,
       status: 1,
@@ -755,6 +761,12 @@ class CyberbossApp {
           turnId: turn.turnId || "",
           previousThreadId: currentThreadId,
           clientId: prepared.clientId || "",
+        });
+        this.recordConversationInbound(prepared, {
+          runtimeId: this.runtimeAdapter.describe().id,
+          threadId: turn.threadId,
+          turnId: turn.turnId || "",
+          workspaceRoot,
         });
       }
       const replyTarget = {
@@ -1787,14 +1799,22 @@ class CyberbossApp {
 
   recordConversationInbound(prepared, context = {}) {
     try {
-      const result = this.conversationArchive?.recordInboundMessage(prepared, context);
+      const sourceMessages = prepared?.provider === "web" && Array.isArray(prepared?.sourceMessages)
+        ? prepared.sourceMessages
+        : [];
+      const result = sourceMessages.length && typeof this.conversationArchive?.recordWebInboundBatch === "function"
+        ? this.conversationArchive.recordWebInboundBatch(sourceMessages, context)
+        : this.conversationArchive?.recordInboundMessage(prepared, context);
       this.logConversationArchiveWarnings(result?.warnings);
       if (prepared?.provider === "web") {
-        this.webChatAdapter.publishInbound({
-          prepared,
-          threadId: context.threadId || "",
-          turnId: context.turnId || "",
-        });
+        const publishMessages = sourceMessages.length ? sourceMessages : [prepared];
+        for (const sourceMessage of publishMessages) {
+          this.webChatAdapter.publishInbound({
+            prepared: sourceMessage,
+            threadId: context.threadId || "",
+            turnId: context.turnId || "",
+          });
+        }
       }
     } catch (error) {
       console.warn(`[cyberboss] conversation inbound archive failed: ${formatErrorMessage(error)}`);

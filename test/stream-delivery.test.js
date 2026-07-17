@@ -63,6 +63,32 @@ async function runCompletedTurnWithResultOnly(streamDelivery, { threadId, turnId
   });
 }
 
+test("web reply delivery carries runtime item identity to the channel", async () => {
+  const { sent, streamDelivery } = createHarness();
+  streamDelivery.queueReplyTargetForThread("thread-web", {
+    userId: "user-web",
+    contextToken: "web:client-web",
+    provider: "web",
+  });
+
+  await runCompletedTurn(streamDelivery, {
+    threadId: "thread-web",
+    turnId: "turn-web",
+    itemId: "item-web",
+    text: "stable reply",
+  });
+
+  assert.deepEqual(sent, [{
+    userId: "user-web",
+    text: "stable reply",
+    contextToken: "web:client-web",
+    provider: "web",
+    threadId: "thread-web",
+    turnId: "turn-web",
+    itemId: "item-web",
+  }]);
+});
+
 test("system silent JSON is suppressed", async () => {
   const { sent, streamDelivery } = createHarness();
   streamDelivery.queueReplyTargetForThread("thread-1", {

@@ -22,6 +22,7 @@ const ALLOWED_META_KEYS = new Set([
   "toolResultPreview",
   "visibleAs",
   "messageId",
+  "itemId",
 ])
 
 const ALLOWED_SOURCE_KEYS = new Set([
@@ -55,6 +56,9 @@ function validateConversationRecord(record) {
     "turnId",
     "workspaceRoot",
     "text",
+    "messageId",
+    "itemId",
+    "sourceKey",
   ]) {
     if (typeof record[key] !== "string") {
       errors.push(`record.${key} must be a string`)

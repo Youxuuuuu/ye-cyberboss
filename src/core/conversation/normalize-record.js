@@ -25,6 +25,14 @@ function normalizeConversationRecord(input = {}) {
     text: input.text,
   })
   const meta = normalizeMeta(input.meta, source.sourceKey)
+  const messageId = normalizeText(input.messageId || meta.messageId)
+  const itemId = normalizeText(input.itemId || meta.itemId)
+  if (messageId) {
+    meta.messageId = messageId
+  }
+  if (itemId) {
+    meta.itemId = itemId
+  }
   const record = {
     id: normalizeText(input.id) || buildRecordId(source.sourceKey),
     type: normalizeText(input.type),
@@ -35,6 +43,9 @@ function normalizeConversationRecord(input = {}) {
     turnId: normalizeText(input.turnId),
     workspaceRoot: normalizeText(input.workspaceRoot),
     text: typeof input.text === "string" ? input.text.trim() : "",
+    messageId,
+    itemId,
+    sourceKey: source.sourceKey,
     meta,
     source,
   }

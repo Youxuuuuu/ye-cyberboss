@@ -172,6 +172,44 @@ class ConversationArchive {
     return { writtenCount: 0, warnings: [] }
   }
 
+  recordWebInboundBatch(messages = [], context = {}) {
+    const records = (Array.isArray(messages) ? messages : [])
+      .filter((message) => message && normalizeText(message.messageId))
+      .map((message) => {
+        const messageId = normalizeText(message.messageId)
+        const quote = extractQuote(message.originalText || message.text || "")
+        const attachments = normalizeMediaList(message.attachments, {
+          workspaceRoot: context.workspaceRoot,
+          stateDir: this.config.stateDir,
+        })
+        return normalizeConversationRecord({
+          id: `web-user-${messageId}`,
+          messageId,
+          type: "user",
+          timestamp: message.receivedAt || new Date().toISOString(),
+          runtimeId: normalizeText(context.runtimeId),
+          threadId: normalizeText(context.threadId),
+          turnId: normalizeText(context.turnId),
+          workspaceRoot: normalizeText(context.workspaceRoot),
+          text: quote.text,
+          meta: {
+            messageId,
+            ...(quote.quote ? { quote: quote.quote } : {}),
+            attachments: attachments.filter((item) => item.kind !== "file"),
+            files: attachments.filter((item) => item.kind === "file"),
+            stickers: attachments.filter((item) => item.kind === "sticker"),
+          },
+          source: {
+            provider: "web",
+            sourceType: "web.message.user",
+            rawId: messageId,
+            sourceKey: `web|message|${messageId}`,
+          },
+        })
+      })
+    return this.writer.writeRecords(records)
+  }
+
   registerRealtimeSource({ runtimeId = "", threadId = "", workspaceRoot = "", sourceFile = "" } = {}) {
     assertRuntimeId(runtimeId)
     const normalizedSourceFile = normalizeSourceFile(sourceFile)
@@ -442,6 +480,9 @@ class ConversationArchive {
     if (normalizeText(record?.meta?.visibleAs) === "system_compact") {
       return false
     }
+    if (this.hasCanonicalWebUserForTurn(record)) {
+      return true
+    }
     if (!normalizeText(record.text) && hasMedia(record.meta) && this.hasRecentCanonicalRealtimeUser(record)) {
       return true
     }
@@ -602,6 +643,25 @@ class ConversationArchive {
       && candidate.threadId === record.threadId
       && normalizeText(candidate.text)
       && Math.abs(Date.parse(candidate.timestamp) - comparisonTime) < 60_000
+    ))
+  }
+
+  hasCanonicalWebUserForTurn(record) {
+    const threadId = normalizeText(record?.threadId)
+    const turnId = normalizeText(record?.turnId)
+    if (!threadId || !turnId) {
+      return false
+    }
+    const existing = this.writer.readExistingDayRecords(
+      this.writer.resolveDayFilePath(record.date),
+      []
+    )
+    return existing.some((candidate) => (
+      candidate.type === "user"
+      && normalizeText(candidate.threadId) === threadId
+      && normalizeText(candidate.turnId) === turnId
+      && normalizeText(candidate?.source?.provider) === "web"
+      && normalizeText(candidate.messageId || candidate?.meta?.messageId)
     ))
   }
 }

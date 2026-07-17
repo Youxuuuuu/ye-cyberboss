@@ -116,12 +116,16 @@ class CodexImportParser {
       }
       return [normalizeConversationRecord({
         type: role,
+        itemId: normalizeText(raw?.payload?.itemId || raw?.payload?.id) || (this.currentTurnId ? `item-${this.currentTurnId}` : ""),
         timestamp: normalizeTimestamp(raw.timestamp, fallbackTimestamp),
         runtimeId: "codex",
         threadId: this.currentThreadId,
         turnId: this.currentTurnId,
         workspaceRoot: this.currentWorkspaceRoot,
         text,
+        meta: {
+          itemId: normalizeText(raw?.payload?.itemId || raw?.payload?.id) || (this.currentTurnId ? `item-${this.currentTurnId}` : ""),
+        },
         source: {
           provider: "codex",
           sourceType: `codex.${payloadType}`,
@@ -174,12 +178,16 @@ class CodexImportParser {
       }
       return [normalizeConversationRecord({
         type: role,
+        itemId: normalizeText(payload.itemId || payload.id) || (this.currentTurnId ? `item-${this.currentTurnId}` : ""),
         timestamp,
         runtimeId: "codex",
         threadId: this.currentThreadId,
         turnId: this.currentTurnId,
         workspaceRoot: this.currentWorkspaceRoot,
         text,
+        meta: {
+          itemId: normalizeText(payload.itemId || payload.id) || (this.currentTurnId ? `item-${this.currentTurnId}` : ""),
+        },
         source: {
           provider: "codex",
           sourceType: `codex.${role}`,

@@ -32,6 +32,10 @@ function buildMergedInboundPrepared({
   const attachments = queued.flatMap((message) => Array.isArray(message.attachments) ? message.attachments : []);
   const attachmentFailures = queued.flatMap((message) => Array.isArray(message.attachmentFailures) ? message.attachmentFailures : []);
   const originalText = originalTexts.join("\n\n");
+  const sourceMessages = [
+    ...queued,
+    ...(trailingPrepared && !queued.includes(trailingPrepared) ? [trailingPrepared] : []),
+  ].map((message) => clonePreparedInboundMessage(message));
 
   return {
     bindingKey,
@@ -41,6 +45,7 @@ function buildMergedInboundPrepared({
     text: originalText,
     attachments,
     attachmentFailures,
+    sourceMessages,
   };
 }
 

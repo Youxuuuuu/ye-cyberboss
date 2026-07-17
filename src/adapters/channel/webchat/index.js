@@ -61,6 +61,14 @@ function createWebChatChannelAdapter({ config }) {
     clients.forEach((client) => {
       if (matchesClient(payload, client)) {
         send(client, payload);
+        if (
+          payload.kind === "thread.created"
+          && payload.threadId
+          && payload.previousThreadId
+          && client.threadId === payload.previousThreadId
+        ) {
+          client.threadId = payload.threadId;
+        }
       }
     });
     return payload;
@@ -156,6 +164,7 @@ function createWebChatChannelAdapter({ config }) {
       : text;
     const record = {
       id: `web-inbound-${normalizeText(prepared.messageId) || crypto.randomUUID()}`,
+      messageId: normalizeText(prepared.messageId),
       type: "user",
       role: "user",
       timestamp: prepared.receivedAt || new Date().toISOString(),
@@ -164,6 +173,7 @@ function createWebChatChannelAdapter({ config }) {
       text: visibleText,
       meta: {
         messageId: normalizeText(prepared.messageId),
+        sourceKey: `web|message|${normalizeText(prepared.messageId)}`,
         ...(quote ? { quote } : {}),
         ...(Array.isArray(prepared.attachments) && prepared.attachments.length
           ? { attachments: prepared.attachments }
@@ -260,15 +270,17 @@ function createWebChatChannelAdapter({ config }) {
     return normalizeSenderId(config.webChatSenderId) || normalizeSenderId(config.allowedUserIds?.[0]);
   }
 
-  function sendText({ userId, text, threadId = "", turnId = "", messageId = "" } = {}) {
+  function sendText({ userId, text, threadId = "", turnId = "", itemId = "", messageId = "" } = {}) {
     const normalizedText = String(text || "").trim();
     if (!normalizedText) return Promise.resolve();
     const quote = extractQuoteText(normalizedText);
     const visibleText = quote
       ? normalizedText.replace(/^\[Quoted:\s*[^\]]+\]\s*\r?\n/i, "").trim()
       : normalizedText;
+    const stableItemId = normalizeText(itemId) || normalizeText(messageId) || crypto.randomUUID();
     const record = {
-      id: `web-assistant-${normalizeText(messageId) || crypto.randomUUID()}`,
+      id: `web-assistant-${stableItemId}`,
+      itemId: stableItemId,
       type: "assistant",
       role: "assistant",
       timestamp: new Date().toISOString(),
@@ -276,6 +288,8 @@ function createWebChatChannelAdapter({ config }) {
       turnId: normalizeText(turnId),
       text: visibleText,
       meta: {
+        itemId: stableItemId,
+        sourceKey: ["web", normalizeText(threadId), normalizeText(turnId), stableItemId, "assistant"].filter(Boolean).join("|"),
         ...(quote ? { quote } : {}),
         ephemeral: true,
         source: "webchat",
@@ -287,6 +301,7 @@ function createWebChatChannelAdapter({ config }) {
       senderId: userId,
       threadId: record.threadId,
       turnId: record.turnId,
+      itemId: stableItemId,
       record,
     });
     return Promise.resolve();
@@ -303,14 +318,16 @@ function createWebChatChannelAdapter({ config }) {
     return Promise.resolve();
   }
 
-  function sendFile({ userId, filePath, threadId = "", turnId = "", file = null } = {}) {
+  function sendFile({ userId, filePath, threadId = "", turnId = "", itemId = "", messageId = "", file = null } = {}) {
     const media = file || {
       kind: inferKindFromFilePath(filePath),
       fileName: path.basename(String(filePath || "")),
       path: filePath,
     };
+    const stableItemId = normalizeText(itemId) || normalizeText(messageId) || crypto.randomUUID();
     const record = {
-      id: `web-assistant-file-${crypto.randomUUID()}`,
+      id: `web-assistant-file-${stableItemId}`,
+      itemId: stableItemId,
       type: "assistant",
       role: "assistant",
       timestamp: new Date().toISOString(),
@@ -318,6 +335,8 @@ function createWebChatChannelAdapter({ config }) {
       turnId: normalizeText(turnId),
       text: "",
       meta: {
+        itemId: stableItemId,
+        sourceKey: ["web", normalizeText(threadId), normalizeText(turnId), stableItemId, "assistant"].filter(Boolean).join("|"),
         files: [media],
         ephemeral: true,
         source: "webchat",
@@ -329,6 +348,7 @@ function createWebChatChannelAdapter({ config }) {
       senderId: userId,
       threadId: record.threadId,
       turnId: record.turnId,
+      itemId: stableItemId,
       record,
     });
     return Promise.resolve({ filePath });

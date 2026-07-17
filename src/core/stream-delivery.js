@@ -379,6 +379,7 @@ class StreamDelivery {
       payload.provider = "web";
       payload.threadId = state.threadId;
       payload.turnId = state.turnId;
+      payload.itemId = delivery.itemId;
     }
     if (prependDeferredPrefix) {
       payload.preserveBlock = true;
@@ -428,6 +429,7 @@ class StreamDelivery {
           retryPayload.provider = "web";
           retryPayload.threadId = payload.threadId;
           retryPayload.turnId = payload.turnId;
+          retryPayload.itemId = payload.itemId;
         }
         if (payload.preserveBlock) {
           retryPayload.preserveBlock = true;

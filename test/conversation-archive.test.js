@@ -13,6 +13,49 @@ const { ConversationSourceLineResolver } = require("../src/core/conversation/sou
 
 const WORKSPACE_ROOT = "D:\\study\\cyberboss"
 
+test("web inbound batch writes one canonical record per messageId", () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-web-identity-"))
+  const archive = new ConversationArchive({
+    config: {
+      conversationDir: path.join(stateDir, "conversations"),
+      stateDir,
+    },
+  })
+
+  const result = archive.recordWebInboundBatch([
+    {
+      provider: "web",
+      senderId: "user-1",
+      messageId: "message-web-1",
+      originalText: "first",
+      receivedAt: "2026-07-17T00:00:00.000Z",
+      attachments: [],
+    },
+    {
+      provider: "web",
+      senderId: "user-1",
+      messageId: "message-web-2",
+      originalText: "second",
+      receivedAt: "2026-07-17T00:00:01.000Z",
+      attachments: [],
+    },
+  ], {
+    runtimeId: "claudecode",
+    threadId: "thread-web",
+    turnId: "turn-web",
+    workspaceRoot: WORKSPACE_ROOT,
+  })
+
+  assert.equal(result.writtenCount, 2)
+  const records = readConversationDay(stateDir, "2026-07-17")
+  assert.deepEqual(records.map((record) => record.messageId), ["message-web-1", "message-web-2"])
+  assert.deepEqual(records.map((record) => record.sourceKey), [
+    "web|message|message-web-1",
+    "web|message|message-web-2",
+  ])
+  assert.ok(records.every((record) => record.threadId === "thread-web" && record.turnId === "turn-web"))
+})
+
 test("codex import normalizes short operation text, media, prompts, and source lines", () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-codex-import-"))
   const sourceFile = path.join(stateDir, "codex-session.jsonl")

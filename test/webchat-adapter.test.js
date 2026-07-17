@@ -63,6 +63,44 @@ test("webchat adapter replays and filters events across a draft thread", () => {
   assert.equal(adapter.getReplyTarget("user-1"), null);
 });
 
+test("webchat messages preserve canonical user and assistant identities", async () => {
+  const adapter = createWebChatChannelAdapter({
+    config: {
+      stateDir: fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-webchat-identity-")),
+      webChatSenderId: "user-identity",
+      allowedUserIds: ["user-identity"],
+      webChatEnabled: true,
+    },
+  });
+
+  const inbound = adapter.publishInbound({
+    prepared: {
+      senderId: "user-identity",
+      messageId: "message-identity-1",
+      text: "hello",
+      receivedAt: "2026-07-17T00:00:00.000Z",
+    },
+    threadId: "thread-identity",
+    turnId: "turn-identity",
+  });
+  assert.equal(inbound.record.messageId, "message-identity-1");
+  assert.equal(inbound.record.meta.messageId, "message-identity-1");
+
+  await adapter.sendText({
+    userId: "user-identity",
+    threadId: "thread-identity",
+    turnId: "turn-identity",
+    itemId: "item-identity-1",
+    text: "reply",
+  });
+  const assistant = adapter.getRecentEvents(inbound.cursor)
+    .find((event) => event.messageKind === "assistant");
+  assert.equal(assistant.itemId, "item-identity-1");
+  assert.equal(assistant.record.itemId, "item-identity-1");
+  assert.equal(assistant.record.meta.itemId, "item-identity-1");
+  assert.equal(assistant.record.id, "web-assistant-item-identity-1");
+});
+
 test("webchat upload returns an inbox media reference", async () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-webchat-upload-"));
   const adapter = createWebChatChannelAdapter({

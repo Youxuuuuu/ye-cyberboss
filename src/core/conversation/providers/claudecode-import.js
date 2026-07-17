@@ -124,12 +124,16 @@ class ClaudeCodeParser {
       if (item.type === "text" && normalizeText(item.text) && !isSilentActionText(item.text)) {
         records.push(normalizeConversationRecord({
           type: "assistant",
+          itemId: `item-${turnId}`,
           timestamp,
           runtimeId: "claudecode",
           threadId,
           turnId,
           workspaceRoot: this.currentWorkspaceRoot,
           text: item.text.trim(),
+          meta: {
+            itemId: `item-${turnId}`,
+          },
           source: {
             provider: "claudecode",
             sourceType: `claudecode.${this.mode}.assistant`,
