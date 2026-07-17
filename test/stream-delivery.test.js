@@ -52,14 +52,14 @@ async function runCompletedTurn(streamDelivery, { threadId, turnId, itemId, text
   });
 }
 
-async function runCompletedTurnWithResultOnly(streamDelivery, { threadId, turnId, text }) {
+async function runCompletedTurnWithResultOnly(streamDelivery, { threadId, turnId, itemId, text }) {
   await streamDelivery.handleRuntimeEvent({
     type: "runtime.turn.started",
     payload: { threadId, turnId },
   });
   await streamDelivery.handleRuntimeEvent({
     type: "runtime.turn.completed",
-    payload: { threadId, turnId, text },
+    payload: { threadId, turnId, itemId, text },
   });
 }
 
@@ -87,6 +87,25 @@ test("web reply delivery carries runtime item identity to the channel", async ()
     turnId: "turn-web",
     itemId: "item-web",
   }]);
+});
+
+test("result-only web delivery keeps the native assistant item identity", async () => {
+  const { sent, streamDelivery } = createHarness();
+  streamDelivery.queueReplyTargetForThread("thread-native", {
+    userId: "user-native",
+    contextToken: "web:client-native",
+    provider: "web",
+  });
+
+  await runCompletedTurnWithResultOnly(streamDelivery, {
+    threadId: "thread-native",
+    turnId: "turn-transport",
+    itemId: "claude:msg-native-1:2",
+    text: "final answer",
+  });
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].itemId, "claude:msg-native-1:2");
 });
 
 test("system silent JSON is suppressed", async () => {

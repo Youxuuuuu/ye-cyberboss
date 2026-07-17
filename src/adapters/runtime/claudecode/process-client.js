@@ -1,5 +1,6 @@
 const { spawn } = require("child_process");
 const os = require("os");
+const { buildClaudeAssistantItemId } = require("./assistant-identity");
 
 const IS_WINDOWS = os.platform() === "win32";
 const WINDOWS_EXECUTABLE_SUFFIX_RE = /\.(cmd|exe|bat)$/i;
@@ -22,6 +23,7 @@ class ClaudeCodeProcessClient {
     this.listeners = new Set();
     this.pendingTurnId = "";
     this.pendingTurnContext = null;
+    this.pendingReplyItemId = "";
     this.sessionId = "";
     this.resumeSessionId = "";
     this.activeThreadId = "";
@@ -164,13 +166,18 @@ class ClaudeCodeProcessClient {
     }
     const content = raw?.message?.content;
     if (!Array.isArray(content)) return;
-    for (const item of content) {
+    for (const [contentIndex, item] of content.entries()) {
       if (!item || typeof item !== "object") continue;
       const itemType = item.type;
       if (itemType === "text" && typeof item.text === "string" && item.text) {
+        const itemId = buildClaudeAssistantItemId(raw, contentIndex);
+        if (itemId) {
+          this.pendingReplyItemId = itemId;
+        }
         this.emit({
           type: "assistant.text",
           text: item.text.trim(),
+          itemId,
           turnId: this.pendingTurnId,
           sessionId: this.activeThreadId || this.sessionId,
         }, raw);
@@ -242,10 +249,12 @@ class ClaudeCodeProcessClient {
       type: "turn.completed",
       turnId: this.pendingTurnId,
       sessionId: this.activeThreadId || this.sessionId,
+      itemId: this.pendingReplyItemId,
       text: typeof raw.result === "string" ? raw.result.trim() : "",
     }, raw);
     this.pendingTurnId = "";
     this.pendingTurnContext = null;
+    this.pendingReplyItemId = "";
     this.activeThreadId = "";
   }
 
@@ -299,6 +308,7 @@ class ClaudeCodeProcessClient {
       throw new Error("claudecode process not running");
     }
     this.pendingTurnId = `turn-${Date.now()}`;
+    this.pendingReplyItemId = "";
     const requestId = normalizeNonEmptyString(correlation?.requestId);
     const logicalTurnId = normalizeNonEmptyString(correlation?.logicalTurnId)
       || (requestId ? `web:${requestId}` : "");
@@ -400,6 +410,7 @@ class ClaudeCodeProcessClient {
     this.activeThreadId = "";
     this.pendingTurnId = "";
     this.pendingTurnContext = null;
+    this.pendingReplyItemId = "";
     this.rejectSessionWaiters(new Error("claudecode process closed"));
   }
 

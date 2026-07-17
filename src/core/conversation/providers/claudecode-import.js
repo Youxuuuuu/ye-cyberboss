@@ -9,6 +9,7 @@ const { normalizeConversationRecord } = require("../normalize-record")
 const { normalizeMediaList } = require("../normalize-media")
 const { normalizeToolName } = require("../normalize-tool-call")
 const { normalizeTimestamp } = require("../normalize-time")
+const { buildClaudeAssistantItemId } = require("../../../adapters/runtime/claudecode/assistant-identity")
 
 class ClaudeCodeParser {
   constructor({ mode = "import", stateDir = "", maxStateEntries = 5000 } = {}) {
@@ -122,9 +123,10 @@ class ClaudeCodeParser {
         return
       }
       if (item.type === "text" && normalizeText(item.text) && !isSilentActionText(item.text)) {
+        const itemId = buildClaudeAssistantItemId(raw, index)
         records.push(normalizeConversationRecord({
           type: "assistant",
-          itemId: `item-${turnId}`,
+          itemId,
           timestamp,
           runtimeId: "claudecode",
           threadId,
@@ -132,7 +134,7 @@ class ClaudeCodeParser {
           workspaceRoot: this.currentWorkspaceRoot,
           text: item.text.trim(),
           meta: {
-            itemId: `item-${turnId}`,
+            ...(itemId ? { itemId } : {}),
           },
           source: {
             provider: "claudecode",

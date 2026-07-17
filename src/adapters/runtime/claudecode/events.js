@@ -45,7 +45,7 @@ function mapClaudeCodeMessageToRuntimeEvent(message, raw) {
         payload: {
           threadId: message.sessionId,
           turnId: message.turnId,
-          itemId: `item-${message.turnId}`,
+          itemId: normalizeString(message.itemId),
           text: message.text,
         },
       };
@@ -55,6 +55,7 @@ function mapClaudeCodeMessageToRuntimeEvent(message, raw) {
         payload: {
           threadId: message.sessionId,
           turnId: message.turnId,
+          itemId: normalizeString(message.itemId),
           text: typeof message.text === "string" ? message.text : "",
         },
       };
