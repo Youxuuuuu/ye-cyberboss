@@ -375,6 +375,11 @@ class StreamDelivery {
       text: prependDeferredPrefix ? buildEffectiveReplyText(state.deferredReplyPrefix, baseText) : baseText,
       contextToken: state.replyTarget.contextToken,
     };
+    if (state.replyTarget.provider === "web") {
+      payload.provider = "web";
+      payload.threadId = state.threadId;
+      payload.turnId = state.turnId;
+    }
     if (prependDeferredPrefix) {
       payload.preserveBlock = true;
     }
@@ -388,6 +393,11 @@ class StreamDelivery {
       text,
       contextToken: initialTarget.contextToken,
     };
+    if (initialTarget.provider === "web") {
+      payload.provider = "web";
+      payload.threadId = state.threadId;
+      payload.turnId = state.turnId;
+    }
     await this.sendTextWithRetry(state, payload, { kind: "system_reply" });
   }
 
@@ -414,6 +424,11 @@ class StreamDelivery {
           text: payload.text,
           contextToken: retryTarget.contextToken,
         };
+        if (retryTarget.provider === "web") {
+          retryPayload.provider = "web";
+          retryPayload.threadId = payload.threadId;
+          retryPayload.turnId = payload.turnId;
+        }
         if (payload.preserveBlock) {
           retryPayload.preserveBlock = true;
         }
@@ -444,7 +459,7 @@ class StreamDelivery {
       return false;
     }
     const target = state?.replyTarget || {};
-    if (!target.userId || !text) {
+    if (!target.userId || !text || target.provider === "web") {
       return false;
     }
     try {
@@ -469,7 +484,7 @@ class StreamDelivery {
     if (!isSystemReplyContextFailure(error)) {
       return null;
     }
-    if (!currentTarget?.userId) {
+    if (!currentTarget?.userId || currentTarget.provider === "web") {
       return null;
     }
     if (typeof this.channelAdapter.getKnownContextTokens !== "function") {

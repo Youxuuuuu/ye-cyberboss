@@ -3,6 +3,9 @@ const path = require("path");
 const crypto = require("crypto");
 const fs = require("fs");
 const { createWeixinChannelAdapter } = require("../adapters/channel/weixin");
+const { createWebChatChannelAdapter } = require("../adapters/channel/webchat");
+const { createWebChatServer } = require("../adapters/channel/webchat/server");
+const { createChannelRouter } = require("../adapters/channel/router");
 const { DEFAULT_MIN_WEIXIN_CHUNK, MAX_MIN_WEIXIN_CHUNK } = require("../adapters/channel/weixin/config-store");
 const { persistIncomingWeixinAttachments } = require("../adapters/channel/weixin/media-receive");
 const { createCodexRuntimeAdapter } = require("../adapters/runtime/codex");
@@ -63,7 +66,17 @@ function createRuntimeAdapter(config) {
 class CyberbossApp {
   constructor(config) {
     this.config = config;
-    this.channelAdapter = createWeixinChannelAdapter(config);
+    this.weixinChannelAdapter = createWeixinChannelAdapter(config);
+    this.webChatAdapter = createWebChatChannelAdapter({ config });
+    this.channelAdapter = createChannelRouter({
+      weixin: this.weixinChannelAdapter,
+      web: this.webChatAdapter,
+    });
+    this.webChatServer = createWebChatServer({
+      config,
+      app: this,
+      adapter: this.webChatAdapter,
+    });
     this.timelineIntegration = createTimelineIntegration(config);
     const projectTooling = createProjectTooling(config, {
       channelAdapter: this.channelAdapter,
@@ -97,6 +110,9 @@ class CyberbossApp {
       this.runtimeEventChain = this.runtimeEventChain
         .catch(() => {})
         .then(() => {
+          if (event) {
+            this.webChatAdapter.publishRuntimeEvent(event);
+          }
           if (event) {
             this.threadStateStore.applyRuntimeEvent(event);
           }
@@ -140,6 +156,7 @@ class CyberbossApp {
       accountId: account.accountId,
     });
     const runtimeState = await this.runtimeAdapter.initialize();
+    await this.webChatServer?.start();
     const knownContextTokens = Object.keys(this.channelAdapter.getKnownContextTokens()).length;
     const syncBuffer = this.channelAdapter.loadSyncBuffer();
     await this.restoreBoundThreadSubscriptions();
@@ -155,6 +172,9 @@ class CyberbossApp {
     console.log(`[cyberboss] syncBuffer=${syncBuffer ? "ready" : "empty"}`);
     console.log(`[cyberboss] runtimeEndpoint=${runtimeState.endpoint || runtimeState.command || "(spawn)"}`);
     console.log(`[cyberboss] runtimeModels=${runtimeState.models?.length || 0}`);
+    if (this.webChatServer && this.config.webChatEnabled !== false) {
+      console.log(`[cyberboss] webChat=http://${this.config.webChatHost}:${this.config.webChatPort}`);
+    }
     if (this.config.startWithLocationServer) {
       await this.ensureLocationServerStarted();
     }
@@ -169,6 +189,7 @@ class CyberbossApp {
     const shutdown = createShutdownController(async () => {
       this.clearPendingImageInboundTimers();
       this.conversationArchive?.close?.();
+      await this.webChatServer?.close();
       await this.closeLocationServer();
       await this.runtimeAdapter.close();
     });
@@ -220,9 +241,244 @@ class CyberbossApp {
       shutdown.dispose();
       this.clearPendingImageInboundTimers();
       this.conversationArchive?.close?.();
+      await this.webChatServer?.close();
       await this.closeLocationServer();
       await this.runtimeAdapter.close();
     }
+  }
+
+  getWebChatIdentity() {
+    let account = null;
+    try {
+      account = this.weixinChannelAdapter.resolveAccount();
+    } catch {
+      account = null;
+    }
+    return {
+      workspaceId: this.config.workspaceId,
+      workspaceRoot: normalizeWorkspaceRoot(this.config.workspaceRoot),
+      accountId: normalizeCommandArgument(this.activeAccountId || this.config.accountId || account?.accountId) || "default",
+      senderId: normalizeCommandArgument(
+        this.config.webChatSenderId
+          || this.config.allowedUserIds?.[0]
+          || account?.userId,
+      ),
+    };
+  }
+
+  resolveWebChatContext(senderId = "") {
+    const identity = this.getWebChatIdentity();
+    const normalizedSenderId = normalizeCommandArgument(senderId) || identity.senderId;
+    if (!normalizedSenderId) {
+      throw new Error("CYBERBOSS_WEB_CHAT_SENDER_ID or an allowed WeChat user is required");
+    }
+    const accountId = identity.accountId;
+    const bindingKey = this.runtimeAdapter.getSessionStore().buildBindingKey({
+      workspaceId: identity.workspaceId,
+      accountId,
+      senderId: normalizedSenderId,
+    });
+    return {
+      ...identity,
+      senderId: normalizedSenderId,
+      accountId,
+      bindingKey,
+      workspaceRoot: this.resolveWorkspaceRoot(bindingKey),
+    };
+  }
+
+  getWebChatStatus({ senderId = "", threadId = "" } = {}) {
+    const context = this.resolveWebChatContext(senderId);
+    const sessionStore = this.runtimeAdapter.getSessionStore();
+    const selectedThreadId = normalizeThreadId(threadId)
+      || sessionStore.getThreadIdForWorkspace(context.bindingKey, context.workspaceRoot)
+      || "";
+    const threadState = selectedThreadId ? this.threadStateStore.getThreadState(selectedThreadId) : null;
+    const runtimeParams = sessionStore.getRuntimeParamsForWorkspace(context.bindingKey, context.workspaceRoot);
+    const contextUsage = threadState?.context
+      || (!selectedThreadId ? this.threadStateStore.getLatestContext(this.runtimeAdapter.describe().id) : null);
+    return {
+      connected: this.config.webChatEnabled !== false,
+      workspaceId: context.workspaceId,
+      threadId: selectedThreadId,
+      status: threadState?.status || "idle",
+      model: runtimeParams.model || normalizeCommandArgument(this.runtimeAdapter.describe().model),
+      modelProvider: runtimeParams.modelProvider || normalizeCommandArgument(this.runtimeAdapter.describe().modelProvider),
+      usage: contextUsage || null,
+      pendingApproval: threadState?.pendingApproval || null,
+      webClients: this.webChatAdapter.getClientCount(),
+    };
+  }
+
+  async getWebChatModels({ senderId = "" } = {}) {
+    const context = this.resolveWebChatContext(senderId);
+    const sessionStore = this.runtimeAdapter.getSessionStore();
+    const catalog = typeof this.runtimeAdapter.listAvailableModels === "function"
+      ? await this.runtimeAdapter.listAvailableModels()
+      : sessionStore.getAvailableModelCatalog();
+    const runtimeParams = sessionStore.getRuntimeParamsForWorkspace(context.bindingKey, context.workspaceRoot);
+    return {
+      runtime: this.runtimeAdapter.describe().id,
+      currentModel: runtimeParams.model || normalizeCommandArgument(this.runtimeAdapter.describe().model),
+      currentModelProvider: runtimeParams.modelProvider || normalizeCommandArgument(this.runtimeAdapter.describe().modelProvider),
+      models: Array.isArray(catalog?.models) ? catalog.models : [],
+      updatedAt: catalog?.updatedAt || "",
+    };
+  }
+
+  async setWebChatModel({ senderId = "", model = "", modelProvider = "" } = {}) {
+    const context = this.resolveWebChatContext(senderId);
+    const query = normalizeCommandArgument(model);
+    if (!query) {
+      return this.getWebChatModels({ senderId: context.senderId });
+    }
+    const sessionStore = this.runtimeAdapter.getSessionStore();
+    const catalog = typeof this.runtimeAdapter.listAvailableModels === "function"
+      ? await this.runtimeAdapter.listAvailableModels()
+      : sessionStore.getAvailableModelCatalog();
+    const runtimeId = this.runtimeAdapter.describe().id || "runtime";
+    let matched = findModelByQuery(catalog?.models || [], query);
+    if (!matched && runtimeId !== "codex" && !catalog?.models?.length) {
+      matched = { model: query };
+    }
+    if (!matched) {
+      throw new Error(`model not found: ${query}`);
+    }
+    sessionStore.setRuntimeParamsForWorkspace(context.bindingKey, context.workspaceRoot, {
+      model: matched.model,
+      ...(modelProvider ? { modelProvider } : {}),
+    });
+    this.webChatAdapter.publish({
+      kind: "model.updated",
+      senderId: context.senderId,
+      threadId: sessionStore.getThreadIdForWorkspace(context.bindingKey, context.workspaceRoot) || "",
+      model: matched.model,
+      modelProvider: modelProvider || "",
+    });
+    return this.getWebChatStatus({ senderId: context.senderId });
+  }
+
+  async selectWebChatThread({ senderId = "", threadId = "", clientId = "" } = {}) {
+    const context = this.resolveWebChatContext(senderId);
+    const normalizedThreadId = normalizeThreadId(threadId);
+    if (!normalizedThreadId) {
+      throw new Error("threadId is required");
+    }
+    const sessionStore = this.runtimeAdapter.getSessionStore();
+    const runtimeParams = sessionStore.getRuntimeParamsForWorkspace(context.bindingKey, context.workspaceRoot);
+    const resumed = await this.runtimeAdapter.resumeThread({
+      threadId: normalizedThreadId,
+      workspaceRoot: context.workspaceRoot,
+      model: runtimeParams.model,
+      modelProvider: runtimeParams.modelProvider,
+    });
+    const selectedThreadId = normalizeThreadId(resumed?.threadId) || normalizedThreadId;
+    sessionStore.setThreadIdForWorkspace(
+      context.bindingKey,
+      context.workspaceRoot,
+      selectedThreadId,
+      { accountId: context.accountId, senderId: context.senderId },
+    );
+    this.webChatAdapter.setActiveTarget({
+      userId: context.senderId,
+      contextToken: `web:${normalizeCommandArgument(clientId) || crypto.randomUUID()}`,
+      clientId,
+      threadId: selectedThreadId,
+    });
+    this.webChatAdapter.publish({
+      kind: "thread.selected",
+      senderId: context.senderId,
+      threadId: selectedThreadId,
+    });
+    return this.getWebChatStatus({ senderId: context.senderId, threadId: selectedThreadId });
+  }
+
+  async handleWebChatMessages({
+    senderId = "",
+    clientId = "",
+    threadId = "",
+    newThread = false,
+    model = "",
+    modelProvider = "",
+    messages = [],
+    text = "",
+  } = {}) {
+    const context = this.resolveWebChatContext(senderId);
+    const sessionStore = this.runtimeAdapter.getSessionStore();
+    const normalizedClientId = normalizeCommandArgument(clientId) || crypto.randomUUID();
+    const requestedThreadId = normalizeThreadId(threadId);
+    let workspaceRoot = context.workspaceRoot;
+
+    if (newThread) {
+      await this.runtimeAdapter.startFreshThreadDraft({ workspaceRoot });
+      sessionStore.clearThreadIdForWorkspace(context.bindingKey, workspaceRoot);
+    } else if (requestedThreadId) {
+      const currentThreadId = sessionStore.getThreadIdForWorkspace(context.bindingKey, workspaceRoot);
+      if (currentThreadId !== requestedThreadId) {
+        await this.selectWebChatThread({
+          senderId: context.senderId,
+          threadId: requestedThreadId,
+          clientId: normalizedClientId,
+        });
+        workspaceRoot = this.resolveWorkspaceRoot(context.bindingKey);
+      }
+    }
+
+    if (normalizeCommandArgument(model)) {
+      await this.setWebChatModel({
+        senderId: context.senderId,
+        model,
+        modelProvider,
+      });
+    }
+
+    const rawMessages = Array.isArray(messages) && messages.length
+      ? messages.slice(0, 64)
+      : [{ text }];
+    const preparedMessages = rawMessages
+      .map((message, index) => normalizeWebInboundMessage({
+        message,
+        index,
+        clientId: normalizedClientId,
+        context,
+        stateDir: this.config.stateDir,
+      }))
+      .filter(Boolean)
+      .map((message) => buildInboundDraft(message, { attachments: message.attachments }));
+    if (!preparedMessages.length || !preparedMessages.some((message) => message.originalText || message.attachments.length)) {
+      throw new Error("at least one text or attachment is required");
+    }
+
+    const currentThreadId = sessionStore.getThreadIdForWorkspace(context.bindingKey, workspaceRoot) || "";
+    const contextToken = `web:${normalizedClientId}`;
+    this.webChatAdapter.setActiveTarget({
+      userId: context.senderId,
+      contextToken,
+      clientId: normalizedClientId,
+      threadId: currentThreadId,
+    });
+    const prepared = buildMergedInboundPrepared({
+      bindingKey: context.bindingKey,
+      workspaceRoot,
+      messages: preparedMessages,
+    });
+    const result = await this.routePreparedInbound({
+      bindingKey: context.bindingKey,
+      workspaceRoot,
+      prepared,
+    });
+    if (!result) {
+      return {
+        accepted: false,
+        threadId: currentThreadId,
+        turnId: "",
+      };
+    }
+    return {
+      ...result,
+      clientMessageId: normalizedClientId,
+      threadId: result.threadId || currentThreadId,
+    };
   }
 
   async ensureLocationServerStarted() {
@@ -384,6 +640,9 @@ class CyberbossApp {
       accountId: normalized.accountId,
       senderId: normalized.senderId,
     });
+    if (normalized.provider && normalized.provider !== "web" && normalized.provider !== "system") {
+      this.webChatAdapter.clearActiveTarget(normalized.senderId);
+    }
     this.streamDelivery.setReplyTarget(bindingKey, {
       userId: normalized.senderId,
       contextToken: normalized.contextToken,
@@ -440,9 +699,10 @@ class CyberbossApp {
 
   async dispatchPreparedTurn({ bindingKey, workspaceRoot, prepared }) {
     const pendingScopeKey = this.turnGateStore.begin(bindingKey, workspaceRoot);
+    const currentThreadId = this.runtimeAdapter.getSessionStore().getThreadIdForWorkspace(bindingKey, workspaceRoot) || "";
     this.recordConversationInbound(prepared, {
       runtimeId: this.runtimeAdapter.describe().id,
-      threadId: this.runtimeAdapter.getSessionStore().getThreadIdForWorkspace(bindingKey, workspaceRoot) || "",
+      threadId: currentThreadId,
       turnId: "",
       workspaceRoot,
     });
@@ -450,6 +710,8 @@ class CyberbossApp {
       userId: prepared.senderId,
       status: 1,
       contextToken: prepared.contextToken,
+      provider: prepared.provider,
+      threadId: currentThreadId,
     }).catch(() => {});
 
     try {
@@ -479,6 +741,22 @@ class CyberbossApp {
         senderId: prepared.senderId,
       });
       this.turnGateStore.attachThread(pendingScopeKey, turn.threadId);
+      if (prepared.provider === "web") {
+        this.webChatAdapter.setActiveTarget({
+          userId: prepared.senderId,
+          contextToken: prepared.contextToken,
+          clientId: prepared.clientId,
+          threadId: turn.threadId,
+        });
+        this.webChatAdapter.publish({
+          kind: "thread.created",
+          senderId: prepared.senderId,
+          threadId: turn.threadId,
+          turnId: turn.turnId || "",
+          previousThreadId: currentThreadId,
+          clientId: prepared.clientId || "",
+        });
+      }
       const replyTarget = {
         userId: prepared.senderId,
         contextToken: prepared.contextToken,
@@ -493,7 +771,12 @@ class CyberbossApp {
       } else {
         this.streamDelivery.queueReplyTargetForThread(turn.threadId, replyTarget);
       }
-      return true;
+      return {
+        accepted: true,
+        queued: false,
+        threadId: turn.threadId,
+        turnId: turn.turnId || "",
+      };
     } catch (error) {
       this.turnGateStore.releaseScope(bindingKey, workspaceRoot);
       const messageText = error instanceof Error ? error.message : String(error || "unknown error");
@@ -501,6 +784,8 @@ class CyberbossApp {
         userId: prepared.senderId,
         text: `❌ Request failed\n${messageText}`,
         contextToken: prepared.contextToken,
+        provider: prepared.provider,
+        threadId: currentThreadId,
       }).catch(() => {});
       return false;
     }
@@ -533,7 +818,12 @@ class CyberbossApp {
   async routePreparedInbound({ bindingKey, workspaceRoot, prepared }) {
     if (this.isTurnDispatchBlocked(bindingKey, workspaceRoot)) {
       this.bufferPendingInboundMessage({ bindingKey, workspaceRoot, prepared });
-      return false;
+      return {
+        accepted: true,
+        queued: true,
+        threadId: this.runtimeAdapter.getSessionStore().getThreadIdForWorkspace(bindingKey, workspaceRoot) || "",
+        turnId: "",
+      };
     }
     return this.dispatchPreparedTurn({ bindingKey, workspaceRoot, prepared });
   }
@@ -809,6 +1099,10 @@ class CyberbossApp {
     const attachments = Array.isArray(normalized.attachments) ? normalized.attachments : [];
     if (!attachments.length) {
       return buildInboundDraft(normalized);
+    }
+
+    if (normalized?.provider === "web") {
+      return buildInboundDraft(normalized, { attachments });
     }
 
     const persisted = await persistIncomingWeixinAttachments({
@@ -1495,6 +1789,13 @@ class CyberbossApp {
     try {
       const result = this.conversationArchive?.recordInboundMessage(prepared, context);
       this.logConversationArchiveWarnings(result?.warnings);
+      if (prepared?.provider === "web") {
+        this.webChatAdapter.publishInbound({
+          prepared,
+          threadId: context.threadId || "",
+          turnId: context.turnId || "",
+        });
+      }
     } catch (error) {
       console.warn(`[cyberboss] conversation inbound archive failed: ${formatErrorMessage(error)}`);
     }
@@ -1683,6 +1984,8 @@ class CyberbossApp {
       userId: target.userId,
       status: 0,
       contextToken: target.contextToken,
+      provider: target.provider,
+      threadId,
     }).catch(() => {});
   }
 
@@ -1698,6 +2001,8 @@ class CyberbossApp {
       userId: target.userId,
       text: normalizeText(text) || "❌ Execution failed",
       contextToken: target.contextToken,
+      provider: target.provider,
+      threadId,
     }).catch(() => {});
   }
 
@@ -1716,11 +2021,15 @@ class CyberbossApp {
       userId: target.userId,
       status: 0,
       contextToken: target.contextToken,
+      provider: target.provider,
+      threadId: approval?.threadId || "",
     }).catch(() => {});
     await this.channelAdapter.sendText({
       userId: target.userId,
       text: buildApprovalPromptText(approval),
       contextToken: target.contextToken,
+      provider: target.provider,
+      threadId: approval?.threadId || "",
       preserveBlock: true,
     });
     logApprovalTrace(
@@ -1782,6 +2091,10 @@ class CyberbossApp {
     const userId = normalizeCommandArgument(binding?.senderId);
     if (!userId) {
       return null;
+    }
+    const webTarget = this.channelAdapter.getWebReplyTarget?.(userId);
+    if (webTarget) {
+      return webTarget;
     }
     const contextToken = this.channelAdapter.getKnownContextTokens()[userId] || "";
     if (!contextToken) {
@@ -1972,6 +2285,84 @@ function sleep(ms) {
 }
 
 module.exports = { CyberbossApp };
+
+function normalizeWebInboundMessage({ message, index, clientId, context, stateDir }) {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const rawText = normalizeText(message.text);
+  const quoteText = normalizeWebQuote(message.quote);
+  const text = quoteText
+    ? `[Quoted: ${quoteText}]\n${rawText}`.trim()
+    : rawText;
+  const attachments = (Array.isArray(message.attachments) ? message.attachments : [])
+    .map((item) => normalizeWebAttachment(item, stateDir))
+    .filter(Boolean);
+  if (!text && !attachments.length) {
+    return null;
+  }
+  return {
+    provider: "web",
+    workspaceId: context.workspaceId,
+    accountId: context.accountId,
+    senderId: context.senderId,
+    clientId,
+    messageId: normalizeCommandArgument(message.messageId) || `web-${clientId}-${index}-${Date.now()}`,
+    contextToken: `web:${clientId}`,
+    text,
+    quote: quoteText,
+    attachments,
+    receivedAt: normalizeIsoTime(message.receivedAt) || new Date().toISOString(),
+  };
+}
+
+function normalizeWebQuote(value) {
+  if (typeof value === "string") {
+    return normalizeText(value).slice(0, 4_000);
+  }
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+  return normalizeText(value.text || value.title).slice(0, 4_000);
+}
+
+function normalizeWebAttachment(item, stateDir) {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+  const kind = normalizeText(item.kind) || "file";
+  const url = normalizeText(item.url);
+  if (!item.absolutePath && !item.path && !item.relativePath && (kind === "link" || /^https?:\/\//i.test(url))) {
+    if (!url) {
+      throw new Error("link attachment requires a URL");
+    }
+    return {
+      kind: "link",
+      url,
+      path: url,
+      absolutePath: url,
+      fileName: normalizeText(item.fileName) || url,
+      contentType: normalizeText(item.contentType) || "text/uri-list",
+    };
+  }
+
+  const rawPath = normalizeText(item.absolutePath || item.path || item.relativePath);
+  if (!rawPath) {
+    throw new Error("web attachments must be uploaded before sending");
+  }
+  const stateRoot = path.resolve(stateDir);
+  const absolutePath = path.resolve(path.isAbsolute(rawPath) ? rawPath : path.join(stateRoot, rawPath));
+  if (!isPathWithinRoot(absolutePath, stateRoot)) {
+    throw new Error("web attachment path is outside the Cyberboss state directory");
+  }
+  return {
+    ...item,
+    kind,
+    absolutePath,
+    path: absolutePath,
+    relativePath: path.relative(stateRoot, absolutePath).replace(/\\/g, "/"),
+  };
+}
 
 function parseChannelCommand(text) {
   const normalized = typeof text === "string" ? text.trim() : "";

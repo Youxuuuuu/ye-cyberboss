@@ -459,6 +459,7 @@ class ConversationArchive {
     this.consumePendingInbound(pending.id)
     return normalizeConversationRecord({
       ...record,
+      timestamp: pending.receivedAt || record.timestamp,
       text: normalizeText(record.text) || pending.text,
       meta: {
         ...record.meta,

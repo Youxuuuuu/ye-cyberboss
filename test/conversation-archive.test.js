@@ -237,6 +237,7 @@ test("codex realtime tails raw session lines, uses real source lines, and dedupe
   const userRecord = dayRecords.find((record) => record.type === "user" && record.text === "hello realtime")
   assert.equal(userRecord.source.provider, "codex")
   assert.equal(userRecord.source.sourceLine, 3)
+  assert.equal(userRecord.timestamp, "2026-06-18T01:00:00.000Z")
   assert.equal(userRecord.meta.messageId, "wx-1")
   assert.equal(userRecord.meta.attachments.length, 1)
   assert.equal(userRecord.meta.attachments[0].relativePath, "inbox/2026-06-23/attachment.png")

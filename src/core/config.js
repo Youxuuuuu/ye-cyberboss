@@ -20,6 +20,16 @@ function readConfig() {
     runtime: readTextEnv("CYBERBOSS_RUNTIME") || "codex",
     timelineCommand: readTextEnv("CYBERBOSS_TIMELINE_COMMAND") || "timeline-for-agent",
     accountId: readTextEnv("CYBERBOSS_ACCOUNT_ID"),
+    webChatEnabled: resolveWebChatEnabled({
+      mode,
+      enabled: readOptionalBoolEnv("CYBERBOSS_WEB_CHAT_ENABLED"),
+    }),
+    webChatHost: readTextEnv("CYBERBOSS_WEB_CHAT_HOST") || "127.0.0.1",
+    webChatPort: readIntEnv("CYBERBOSS_WEB_CHAT_PORT") || 8791,
+    webChatToken: readTextEnv("CYBERBOSS_WEB_CHAT_TOKEN"),
+    webChatSenderId: readTextEnv("CYBERBOSS_WEB_CHAT_SENDER_ID"),
+    webChatAllowedOrigins: readListEnv("CYBERBOSS_WEB_CHAT_ALLOWED_ORIGINS"),
+    webChatMaxUploadBytes: readIntEnv("CYBERBOSS_WEB_CHAT_MAX_UPLOAD_BYTES") || 25 * 1024 * 1024,
     weixinBaseUrl: readTextEnv("CYBERBOSS_WEIXIN_BASE_URL") || "https://ilinkai.weixin.qq.com",
     weixinCdnBaseUrl: readTextEnv("CYBERBOSS_WEIXIN_CDN_BASE_URL") || "https://novac2c.cdn.weixin.qq.com/c2c",
     weixinConfigFile: path.join(stateDir, "weixin-config.json"),
@@ -175,6 +185,16 @@ function resolveLocationServerEnabled({ mode, enabled }) {
     return enabled;
   }
   return false;
+}
+
+function resolveWebChatEnabled({ mode, enabled }) {
+  if (mode !== "start") {
+    return false;
+  }
+  if (typeof enabled === "boolean") {
+    return enabled;
+  }
+  return true;
 }
 
 module.exports = { readConfig };
