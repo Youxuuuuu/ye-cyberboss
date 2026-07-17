@@ -5,6 +5,9 @@ class ThreadStateStore {
   }
 
   applyRuntimeEvent(event) {
+    if (event?.type === "runtime.turn.correlated") {
+      return;
+    }
     if (event?.type === "runtime.context.updated") {
       const updatedAt = new Date().toISOString();
       const runtimeId = normalizeRuntimeId(event?.payload?.runtimeId);

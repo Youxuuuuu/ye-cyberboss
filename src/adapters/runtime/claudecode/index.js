@@ -330,7 +330,15 @@ function createClaudeCodeRuntimeAdapter(config) {
           metadata,
         );
       }
-      await client.sendUserMessage({ text: outboundText, threadId: outboundThreadId });
+      await client.sendUserMessage({
+        text: outboundText,
+        threadId: outboundThreadId,
+        correlation: {
+          requestId: normalizeText(metadata.requestId),
+          messageId: normalizeText(metadata.messageId),
+          logicalTurnId: normalizeText(metadata.logicalTurnId),
+        },
+      });
       const returnedThreadId = outboundThreadId || normalizeThreadId(
         await client.waitForSessionId({ timeoutMs: CLAUDE_RESUME_SESSION_TIMEOUT_MS })
       );

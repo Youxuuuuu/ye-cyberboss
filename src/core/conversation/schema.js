@@ -25,6 +25,9 @@ const ALLOWED_META_KEYS = new Set([
   "itemId",
   "requestId",
   "logicalTurnId",
+  "displayTurnId",
+  "transportTurnId",
+  "canonicalTurnId",
   "bubbleSegments",
 ])
 

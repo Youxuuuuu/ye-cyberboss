@@ -19,6 +19,24 @@ function mapClaudeCodeMessageToRuntimeEvent(message, raw) {
         payload: {
           threadId: message.sessionId,
           turnId: message.turnId,
+          requestId: message.requestId,
+          messageId: message.messageId,
+          logicalTurnId: message.logicalTurnId,
+          displayTurnId: message.displayTurnId,
+          transportTurnId: message.transportTurnId || message.turnId,
+        },
+      };
+    case "turn.correlated":
+      return {
+        type: "runtime.turn.correlated",
+        payload: {
+          threadId: message.sessionId,
+          requestId: message.requestId,
+          messageId: message.messageId,
+          logicalTurnId: message.logicalTurnId,
+          displayTurnId: message.displayTurnId || message.logicalTurnId,
+          transportTurnId: message.transportTurnId || message.turnId,
+          canonicalTurnId: message.canonicalTurnId,
         },
       };
     case "reply.completed":

@@ -767,6 +767,9 @@ class CyberbossApp {
           workspaceId: prepared.workspaceId,
           accountId: prepared.accountId,
           senderId: prepared.senderId,
+          requestId: prepared.requestId,
+          messageId: prepared.messageId,
+          logicalTurnId: prepared.logicalTurnId,
         },
       });
       this.runtimeContextStore?.setActiveContext?.({

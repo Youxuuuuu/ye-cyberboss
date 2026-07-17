@@ -21,6 +21,7 @@ class ClaudeCodeProcessClient {
     this.stdoutBuffer = "";
     this.listeners = new Set();
     this.pendingTurnId = "";
+    this.pendingTurnContext = null;
     this.sessionId = "";
     this.resumeSessionId = "";
     this.activeThreadId = "";
@@ -196,6 +197,23 @@ class ClaudeCodeProcessClient {
 
   handleUser(raw) {
     const content = raw?.message?.content;
+    const canonicalTurnId = normalizeNonEmptyString(raw?.promptId);
+    const containsToolResult = Array.isArray(content)
+      && content.some((item) => item?.type === "tool_result");
+    if (canonicalTurnId && this.pendingTurnContext?.requestId && !containsToolResult) {
+      this.emit({
+        type: "turn.correlated",
+        sessionId: normalizeSessionId(raw?.sessionId || raw?.session_id)
+          || this.activeThreadId
+          || this.sessionId,
+        requestId: this.pendingTurnContext.requestId,
+        messageId: this.pendingTurnContext.messageId,
+        logicalTurnId: this.pendingTurnContext.logicalTurnId,
+        displayTurnId: this.pendingTurnContext.displayTurnId,
+        transportTurnId: this.pendingTurnId,
+        canonicalTurnId,
+      }, raw);
+    }
     if (!Array.isArray(content)) return;
     for (const item of content) {
       if (!item || typeof item !== "object") continue;
@@ -227,6 +245,7 @@ class ClaudeCodeProcessClient {
       text: typeof raw.result === "string" ? raw.result.trim() : "",
     }, raw);
     this.pendingTurnId = "";
+    this.pendingTurnContext = null;
     this.activeThreadId = "";
   }
 
@@ -275,11 +294,20 @@ class ClaudeCodeProcessClient {
     }, raw);
   }
 
-  async sendUserMessage({ text, threadId }) {
+  async sendUserMessage({ text, threadId, correlation = null }) {
     if (!this.alive || !this.stdin) {
       throw new Error("claudecode process not running");
     }
     this.pendingTurnId = `turn-${Date.now()}`;
+    const requestId = normalizeNonEmptyString(correlation?.requestId);
+    const logicalTurnId = normalizeNonEmptyString(correlation?.logicalTurnId)
+      || (requestId ? `web:${requestId}` : "");
+    this.pendingTurnContext = requestId ? {
+      requestId,
+      messageId: normalizeNonEmptyString(correlation?.messageId),
+      logicalTurnId,
+      displayTurnId: logicalTurnId,
+    } : null;
     this.activeThreadId = threadId || this.sessionId;
     if (this.ipcServer) {
       this.ipcServer.broadcast({
@@ -297,6 +325,8 @@ class ClaudeCodeProcessClient {
       type: "turn.started",
       turnId: this.pendingTurnId,
       sessionId: this.activeThreadId,
+      ...(this.pendingTurnContext || {}),
+      transportTurnId: this.pendingTurnId,
     }, null);
   }
 
@@ -369,6 +399,7 @@ class ClaudeCodeProcessClient {
     this.resumeSessionId = "";
     this.activeThreadId = "";
     this.pendingTurnId = "";
+    this.pendingTurnContext = null;
     this.rejectSessionWaiters(new Error("claudecode process closed"));
   }
 

@@ -43,6 +43,11 @@ class ConversationArchive {
       maxEntries: this.config.maxSourceResolverEntries,
     })
     this.pendingInboundUserRecords = []
+    this.webTurnByMessageId = new Map()
+    this.webTurnByCanonicalKey = new Map()
+    this.maxWebTurnCorrelations = Number(this.config.maxWebTurnCorrelations) > 0
+      ? Math.floor(Number(this.config.maxWebTurnCorrelations))
+      : 512
     this.trackedRealtimeSources = new Map()
     this.pendingInboundTtlMs = Number(this.config.pendingInboundTtlMs) > 0
       ? Number(this.config.pendingInboundTtlMs)
@@ -104,6 +109,8 @@ class ConversationArchive {
     this.trackedRealtimeSources.clear()
     this.sourceResolver.clear?.()
     this.pendingInboundUserRecords = []
+    this.webTurnByMessageId.clear()
+    this.webTurnByCanonicalKey.clear()
     this.hydratedRealtimeSources.clear()
     this.newlyBootstrappedRealtimeSources.clear()
     this.tailer.clear?.()
@@ -173,6 +180,12 @@ class ConversationArchive {
   }
 
   recordMergedWebInbound(prepared = {}, context = {}) {
+    const correlation = this.rememberWebInboundTurn(prepared, context)
+    const record = this.buildMergedWebInboundRecord(prepared, context, correlation)
+    return this.writer.writeRecords([record])
+  }
+
+  buildMergedWebInboundRecord(prepared = {}, context = {}, correlation = null) {
     const messageId = normalizeText(prepared.messageId)
     if (!messageId) {
       throw new Error("merged web inbound requires messageId")
@@ -180,6 +193,7 @@ class ConversationArchive {
     const requestId = normalizeText(prepared.requestId)
     const logicalTurnId = normalizeText(prepared.logicalTurnId)
       || (requestId ? `web:${requestId}` : "")
+    const resolvedCorrelation = correlation || this.webTurnByMessageId.get(messageId) || null
     const bubbleSegments = normalizeWebBubbleSegments(prepared.bubbleSegments)
     const quote = extractQuote(prepared.originalText || prepared.text || "")
     const displayText = bubbleSegments
@@ -190,20 +204,26 @@ class ConversationArchive {
       workspaceRoot: context.workspaceRoot,
       stateDir: this.config.stateDir,
     })
-    const record = normalizeConversationRecord({
+    return normalizeConversationRecord({
       id: `web-user-${messageId}`,
       messageId,
       type: "user",
       timestamp: prepared.receivedAt || new Date().toISOString(),
       runtimeId: normalizeText(context.runtimeId),
-      threadId: normalizeText(context.threadId),
-      turnId: normalizeText(context.turnId),
+      threadId: normalizeText(resolvedCorrelation?.threadId || context.threadId),
+      turnId: normalizeText(resolvedCorrelation?.canonicalTurnId || context.turnId),
       workspaceRoot: normalizeText(context.workspaceRoot),
       text: displayText,
       meta: {
         messageId,
         ...(requestId ? { requestId } : {}),
-        ...(logicalTurnId ? { logicalTurnId } : {}),
+        ...(logicalTurnId ? { logicalTurnId, displayTurnId: logicalTurnId } : {}),
+        ...(normalizeText(resolvedCorrelation?.transportTurnId)
+          ? { transportTurnId: normalizeText(resolvedCorrelation.transportTurnId) }
+          : {}),
+        ...(normalizeText(resolvedCorrelation?.canonicalTurnId)
+          ? { canonicalTurnId: normalizeText(resolvedCorrelation.canonicalTurnId) }
+          : {}),
         ...(bubbleSegments.length ? { bubbleSegments } : {}),
         ...(quote.quote && bubbleSegments.length <= 1 ? { quote: quote.quote } : {}),
         attachments: attachments.filter((item) => item.kind !== "file"),
@@ -217,7 +237,6 @@ class ConversationArchive {
         sourceKey: `web|message|${messageId}`,
       },
     })
-    return this.writer.writeRecords([record])
   }
 
   recordWebInboundBatch(messages = [], context = {}) {
@@ -235,6 +254,152 @@ class ConversationArchive {
         text: normalizeText(message.originalText || message.text),
       })),
     }, context)
+  }
+
+  rememberWebInboundTurn(prepared = {}, context = {}) {
+    const messageId = normalizeText(prepared.messageId)
+    if (!messageId) return null
+    const existing = this.webTurnByMessageId.get(messageId) || null
+    const requestId = normalizeText(prepared.requestId || existing?.requestId)
+    const logicalTurnId = normalizeText(prepared.logicalTurnId || existing?.logicalTurnId)
+      || (requestId ? `web:${requestId}` : "")
+    const contextTurnId = normalizeText(context.turnId)
+    const canonicalTurnId = normalizeText(existing?.canonicalTurnId)
+    const transportTurnId = contextTurnId
+      && contextTurnId !== logicalTurnId
+      && contextTurnId !== canonicalTurnId
+      ? contextTurnId
+      : normalizeText(existing?.transportTurnId)
+    const bubbleSegments = normalizeWebBubbleSegments(prepared.bubbleSegments)
+    const next = {
+      ...existing,
+      requestId,
+      messageId,
+      logicalTurnId,
+      displayTurnId: logicalTurnId,
+      transportTurnId,
+      canonicalTurnId,
+      runtimeId: normalizeText(context.runtimeId || existing?.runtimeId),
+      threadId: normalizeText(context.threadId || existing?.threadId),
+      workspaceRoot: normalizeText(context.workspaceRoot || existing?.workspaceRoot),
+      text: bubbleSegments.map((segment) => segment.text).filter(Boolean).join("\n\n")
+        || normalizeText(prepared.originalText || prepared.text || existing?.text),
+      prepared: {
+        ...(existing?.prepared || {}),
+        ...prepared,
+        messageId,
+        requestId,
+        logicalTurnId,
+        ...(bubbleSegments.length ? { bubbleSegments } : {}),
+      },
+      createdAtMs: existing?.createdAtMs || Date.now(),
+      updatedAtMs: Date.now(),
+    }
+    this.webTurnByMessageId.set(messageId, next)
+    if (canonicalTurnId && next.threadId) {
+      this.webTurnByCanonicalKey.set(buildWebCanonicalTurnKey(next.threadId, canonicalTurnId), next)
+    }
+    this.pruneWebTurnCorrelations()
+    return next
+  }
+
+  recordWebTurnCorrelation(payload = {}) {
+    const entry = this.findWebTurnForCorrelation(payload)
+    if (!entry) return { writtenCount: 0, warnings: [] }
+    const correlated = this.correlateWebTurn(entry, {
+      threadId: payload.threadId,
+      canonicalTurnId: payload.canonicalTurnId,
+      transportTurnId: payload.transportTurnId,
+    })
+    const record = this.buildMergedWebInboundRecord(correlated.prepared, {
+      runtimeId: correlated.runtimeId,
+      threadId: correlated.threadId,
+      turnId: correlated.canonicalTurnId,
+      workspaceRoot: correlated.workspaceRoot,
+    }, correlated)
+    return this.writer.writeRecords([record])
+  }
+
+  findWebTurnForCorrelation(payload = {}) {
+    const messageId = normalizeText(payload.messageId)
+    if (messageId && this.webTurnByMessageId.has(messageId)) {
+      return this.webTurnByMessageId.get(messageId)
+    }
+    const requestId = normalizeText(payload.requestId)
+    const transportTurnId = normalizeText(payload.transportTurnId)
+    return [...this.webTurnByMessageId.values()].find((entry) => (
+      (requestId && entry.requestId === requestId)
+      || (transportTurnId && entry.transportTurnId === transportTurnId)
+    )) || null
+  }
+
+  correlateWebTurn(entry, { threadId = "", canonicalTurnId = "", transportTurnId = "" } = {}) {
+    const next = {
+      ...entry,
+      threadId: normalizeText(threadId || entry.threadId),
+      canonicalTurnId: normalizeText(canonicalTurnId || entry.canonicalTurnId),
+      transportTurnId: normalizeText(transportTurnId || entry.transportTurnId),
+      updatedAtMs: Date.now(),
+    }
+    this.webTurnByMessageId.set(next.messageId, next)
+    if (next.threadId && next.canonicalTurnId) {
+      this.webTurnByCanonicalKey.set(
+        buildWebCanonicalTurnKey(next.threadId, next.canonicalTurnId),
+        next,
+      )
+    }
+    return next
+  }
+
+  reconcileRawWebUser(record) {
+    const threadId = normalizeText(record?.threadId)
+    const canonicalTurnId = normalizeText(record?.turnId)
+    if (!threadId || !canonicalTurnId) return { matched: false, record }
+    const canonicalKey = buildWebCanonicalTurnKey(threadId, canonicalTurnId)
+    if (this.webTurnByCanonicalKey.has(canonicalKey)) {
+      return { matched: true, record: null }
+    }
+
+    const candidates = [...this.webTurnByMessageId.values()]
+      .filter((entry) => !entry.canonicalTurnId)
+      .filter((entry) => !entry.runtimeId || entry.runtimeId === normalizeText(record.runtimeId))
+      .filter((entry) => !entry.threadId || entry.threadId === threadId)
+      .filter((entry) => !entry.workspaceRoot || !record.workspaceRoot || sameScopePath(entry.workspaceRoot, record.workspaceRoot))
+      .sort((left, right) => {
+        const rawText = normalizeText(record.text)
+        const leftMatches = rawText && normalizeText(left.text) === rawText ? 1 : 0
+        const rightMatches = rawText && normalizeText(right.text) === rawText ? 1 : 0
+        return rightMatches - leftMatches || left.createdAtMs - right.createdAtMs
+      })
+    const entry = candidates[0]
+    if (!entry) return { matched: false, record }
+    const correlated = this.correlateWebTurn(entry, {
+      threadId,
+      canonicalTurnId,
+      transportTurnId: entry.transportTurnId,
+    })
+    return {
+      matched: true,
+      record: this.buildMergedWebInboundRecord(correlated.prepared, {
+        runtimeId: correlated.runtimeId || record.runtimeId,
+        threadId,
+        turnId: canonicalTurnId,
+        workspaceRoot: correlated.workspaceRoot || record.workspaceRoot,
+      }, correlated),
+    }
+  }
+
+  pruneWebTurnCorrelations() {
+    if (this.webTurnByMessageId.size <= this.maxWebTurnCorrelations) return
+    const oldest = [...this.webTurnByMessageId.values()]
+      .sort((left, right) => left.updatedAtMs - right.updatedAtMs)
+      .slice(0, this.webTurnByMessageId.size - this.maxWebTurnCorrelations)
+    for (const entry of oldest) {
+      this.webTurnByMessageId.delete(entry.messageId)
+      if (entry.threadId && entry.canonicalTurnId) {
+        this.webTurnByCanonicalKey.delete(buildWebCanonicalTurnKey(entry.threadId, entry.canonicalTurnId))
+      }
+    }
   }
 
   registerRealtimeSource({ runtimeId = "", threadId = "", workspaceRoot = "", sourceFile = "" } = {}) {
@@ -299,6 +464,9 @@ class ConversationArchive {
 
   recordRuntimeRaw({ runtimeId = "", raw = null, mappedEvent = null, workspaceRoot = "" } = {}) {
     assertRuntimeId(runtimeId)
+    const correlationResult = mappedEvent?.type === "runtime.turn.correlated"
+      ? this.recordWebTurnCorrelation(mappedEvent.payload)
+      : { writtenCount: 0, warnings: [] }
     const threadId = extractThreadId(runtimeId, raw, mappedEvent)
     const sourceFile = this.sourceResolver.resolveSourceFile({
       runtimeId,
@@ -335,8 +503,8 @@ class ConversationArchive {
     }
     const pollResult = this.pollRealtimeSources({ force: true })
     return {
-      writtenCount: directResult.writtenCount + pollResult.writtenCount,
-      warnings: [...directResult.warnings, ...pollResult.warnings],
+      writtenCount: correlationResult.writtenCount + directResult.writtenCount + pollResult.writtenCount,
+      warnings: [...correlationResult.warnings, ...directResult.warnings, ...pollResult.warnings],
     }
   }
 
@@ -519,6 +687,10 @@ class ConversationArchive {
   mergePendingInboundRecord(record, mode = "") {
     if (mode !== "realtime" || record?.type !== "user") {
       return record
+    }
+    const webReconciliation = this.reconcileRawWebUser(record)
+    if (webReconciliation.matched) {
+      return webReconciliation.record
     }
     const pending = this.findMatchingPendingInbound(record)
     if (!pending) {
@@ -840,4 +1012,13 @@ function normalizeWebBubbleSegments(segments = []) {
         : {}),
     }))
     .filter((segment) => segment.segmentId)
+}
+
+function buildWebCanonicalTurnKey(threadId, canonicalTurnId) {
+  return `${normalizeText(threadId)}\u0000${normalizeText(canonicalTurnId)}`
+}
+
+function sameScopePath(left, right) {
+  const normalize = (value) => normalizeText(value).replace(/\\/g, "/").toLowerCase()
+  return normalize(left) === normalize(right)
 }

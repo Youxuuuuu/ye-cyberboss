@@ -56,6 +56,72 @@ test("merged web inbound writes one canonical logical record with bubble segment
   assert.ok(records.every((record) => record.threadId === "thread-web" && record.turnId === "turn-web"))
 })
 
+test("raw Claude user correlates into the existing web user without a second record", () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-web-correlation-"))
+  const archive = new ConversationArchive({
+    config: {
+      conversationDir: path.join(stateDir, "conversations"),
+      stateDir,
+    },
+  })
+  const prepared = {
+    provider: "web",
+    senderId: "user-1",
+    requestId: "request-correlation-1",
+    messageId: "message-correlation-1",
+    logicalTurnId: "web:request-correlation-1",
+    originalText: "first\n\nsecond\n\nthird",
+    receivedAt: "2026-07-18T00:00:00.000Z",
+    attachments: [],
+    bubbleSegments: [
+      { segmentId: "segment-a", text: "first" },
+      { segmentId: "segment-b", text: "second" },
+      { segmentId: "segment-c", text: "third" },
+    ],
+  }
+  archive.recordMergedWebInbound(prepared, {
+    runtimeId: "claudecode",
+    threadId: "thread-correlation-1",
+    turnId: "transport-correlation-1",
+    workspaceRoot: WORKSPACE_ROOT,
+  })
+
+  const rawUser = claudeUser(
+    "thread-correlation-1",
+    "prompt-correlation-1",
+    "user-correlation-1",
+    "[2026-07-18 08:00]\n\nfirst\n\nsecond\n\nthird",
+    "2026-07-18T00:00:01.000Z",
+  )
+  archive.ingestRealtimeSessionLine({
+    runtimeId: "claudecode",
+    raw: rawUser,
+    sourceFile: path.join(stateDir, "claude-correlation.jsonl"),
+    sourceLine: 1,
+    workspaceRoot: WORKSPACE_ROOT,
+  })
+  archive.ingestRealtimeSessionLine({
+    runtimeId: "claudecode",
+    raw: rawUser,
+    sourceFile: path.join(stateDir, "claude-correlation.jsonl"),
+    sourceLine: 1,
+    workspaceRoot: WORKSPACE_ROOT,
+  })
+
+  const records = readConversationDay(stateDir, "2026-07-18")
+  const users = records.filter((record) => record.type === "user")
+  assert.equal(users.length, 1)
+  assert.equal(users[0].source.provider, "web")
+  assert.equal(users[0].sourceKey, "web|message|message-correlation-1")
+  assert.equal(users[0].messageId, "message-correlation-1")
+  assert.equal(users[0].turnId, "prompt-correlation-1")
+  assert.equal(users[0].meta.logicalTurnId, "web:request-correlation-1")
+  assert.equal(users[0].meta.displayTurnId, "web:request-correlation-1")
+  assert.equal(users[0].meta.transportTurnId, "transport-correlation-1")
+  assert.equal(users[0].meta.canonicalTurnId, "prompt-correlation-1")
+  assert.equal(users[0].meta.bubbleSegments.length, 3)
+})
+
 test("codex import normalizes short operation text, media, prompts, and source lines", () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-codex-import-"))
   const sourceFile = path.join(stateDir, "codex-session.jsonl")
