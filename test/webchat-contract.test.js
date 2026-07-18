@@ -63,3 +63,17 @@ test("request fingerprint changes when the same requestId carries a different pa
     buildWebChatRequestFingerprint(changed, { threadId: "thread-1" }),
   )
 })
+
+test("duplicate bubble segment identities are rejected", () => {
+  assert.throws(() => normalizeWebChatSendContract({
+    requestId: "request-duplicate",
+    messageId: "message-duplicate",
+    messages: [{
+      messageId: "message-duplicate",
+      bubbleSegments: [
+        { segmentId: "segment-1", text: "first" },
+        { segmentId: "segment-1", text: "second" },
+      ],
+    }],
+  }), /unique segmentId/)
+})

@@ -20,6 +20,9 @@ function normalizeWebChatSendContract(input = {}, { createId = () => crypto.rand
   if (!bubbleSegments.length) {
     throw new Error("web chat send contract requires at least one bubble segment")
   }
+  if (new Set(bubbleSegments.map((segment) => segment.segmentId)).size !== bubbleSegments.length) {
+    throw new Error("web chat send contract requires unique segmentId values")
+  }
 
   const receivedAt = normalizeText(logicalInput?.receivedAt)
     || rawSegments.map((segment) => normalizeText(segment.receivedAt)).find(Boolean)
