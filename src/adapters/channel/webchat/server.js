@@ -155,8 +155,13 @@ function createWebChatServer({ config, app, adapter }) {
     }
 
     if (request.method === "POST" && url.pathname === "/api/chat/uploads") {
-      const body = await readJsonBody(request, requestBodyLimit(config));
-      const media = await adapter.persistUpload(body);
+      const bytes = await readBinaryBody(request, uploadBodyLimit(config));
+      const media = await adapter.persistUpload({
+        bytes,
+        fileName: decodeUploadFileName(request.headers["x-cyberboss-file-name"]),
+        contentType: normalizeText(request.headers["content-type"]) || "application/octet-stream",
+        kind: normalizeText(request.headers["x-cyberboss-media-kind"]) || "file",
+      });
       sendJson(response, 201, { accepted: true, media });
       return;
     }
@@ -242,7 +247,7 @@ function applyCors(request, response, allowedOrigins = []) {
     response.setHeader("Access-Control-Allow-Origin", origin);
     response.setHeader("Vary", "Origin");
     response.setHeader("Access-Control-Allow-Credentials", "true");
-    response.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Cyberboss-Web-Token");
+    response.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Cyberboss-Web-Token, X-Cyberboss-File-Name, X-Cyberboss-Media-Kind");
     response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   }
 }
@@ -284,6 +289,51 @@ function readJsonBody(request, maxBytes) {
     });
     request.on("error", reject);
   });
+}
+
+function readBinaryBody(request, maxBytes) {
+  return new Promise((resolve, reject) => {
+    let total = 0;
+    let settled = false;
+    const chunks = [];
+    request.on("data", (chunk) => {
+      if (settled) return;
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += bytes.length;
+      if (total > maxBytes) {
+        settled = true;
+        const error = new Error(`upload exceeds the ${Math.round(maxBytes / 1024 / 1024)} MB limit`);
+        error.statusCode = 413;
+        reject(error);
+        return;
+      }
+      chunks.push(bytes);
+    });
+    request.on("end", () => {
+      if (!settled) resolve(Buffer.concat(chunks, total));
+    });
+    request.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
+  });
+}
+
+function decodeUploadFileName(value) {
+  const encoded = normalizeText(value);
+  if (!encoded) return "attachment";
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    const error = new Error("upload file name header must be URI encoded");
+    error.statusCode = 400;
+    throw error;
+  }
+}
+
+function uploadBodyLimit(config) {
+  return Number(config.webChatMaxUploadBytes) || 25 * 1024 * 1024;
 }
 
 function requestBodyLimit(config) {

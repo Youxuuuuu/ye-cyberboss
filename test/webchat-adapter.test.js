@@ -212,7 +212,7 @@ test("webchat upload returns an inbox media reference", async () => {
     },
   });
   const media = await adapter.persistUpload({
-    dataUrl: "data:text/plain;base64,aGVsbG8=",
+    bytes: Buffer.from("hello", "utf8"),
     fileName: "hello.txt",
     contentType: "text/plain",
     kind: "file",

@@ -59,3 +59,60 @@ test("POST /api/chat/messages dispatches the same requestId once", async (t) => 
   assert.equal(replay.deduplicated, true)
   assert.equal(dispatchCount, 1)
 })
+
+test("POST /api/chat/uploads streams binary bytes and rejects oversized bodies", async (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "webchat-server-upload-"))
+  const uploads = []
+  const server = createWebChatServer({
+    config: {
+      stateDir,
+      webChatEnabled: true,
+      webChatHost: "127.0.0.1",
+      webChatPort: 0,
+      webChatAllowedOrigins: [],
+      webChatMaxUploadBytes: 8,
+    },
+    app: {
+      getWebChatIdentity() { return { senderId: "user-1" } },
+    },
+    adapter: {
+      getClientCount() { return 0 },
+      async persistUpload(input) {
+        uploads.push(input)
+        return { kind: input.kind, fileName: input.fileName, sizeBytes: input.bytes.length }
+      },
+    },
+  })
+  await server.start()
+  t.after(() => server.close())
+  const address = server.address()
+  const url = `http://127.0.0.1:${address.port}/api/chat/uploads`
+
+  const accepted = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "text/plain",
+      "X-Cyberboss-File-Name": encodeURIComponent("小诗.txt"),
+      "X-Cyberboss-Media-Kind": "file",
+    },
+    body: Buffer.from("hello", "utf8"),
+  })
+  assert.equal(accepted.status, 201)
+  assert.equal(uploads.length, 1)
+  assert.equal(uploads[0].bytes.toString("utf8"), "hello")
+  assert.equal(uploads[0].fileName, "小诗.txt")
+  assert.equal(uploads[0].contentType, "text/plain")
+  assert.equal(uploads[0].kind, "file")
+
+  const rejected = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "X-Cyberboss-File-Name": "large.bin",
+      "X-Cyberboss-Media-Kind": "file",
+    },
+    body: Buffer.alloc(9, 1),
+  })
+  assert.equal(rejected.status, 413)
+  assert.equal(uploads.length, 1)
+})

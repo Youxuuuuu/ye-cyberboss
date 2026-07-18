@@ -425,27 +425,27 @@ function createWebChatChannelAdapter({ config }) {
   }
 
   async function persistUpload({
-    dataUrl = "",
+    bytes = null,
     fileName = "attachment",
     contentType = "application/octet-stream",
     kind = "file",
   } = {}) {
-    const match = String(dataUrl).match(/^data:([^;,]+);base64,([a-z0-9+/=]+)$/i);
-    if (!match) {
-      throw new Error("upload must be a base64 data URL");
-    }
-    const bytes = Buffer.from(match[2], "base64");
+    const payload = Buffer.isBuffer(bytes)
+      ? bytes
+      : bytes instanceof Uint8Array
+        ? Buffer.from(bytes)
+        : Buffer.alloc(0);
     const maxBytes = Number(config.webChatMaxUploadBytes) || 25 * 1024 * 1024;
-    if (!bytes.length || bytes.length > maxBytes) {
+    if (!payload.length || payload.length > maxBytes) {
       throw new Error(`upload must be between 1 byte and ${Math.round(maxBytes / 1024 / 1024)} MB`);
     }
 
-    const safeContentType = normalizeContentType(contentType) || normalizeContentType(match[1]);
+    const safeContentType = normalizeContentType(contentType) || "application/octet-stream";
     const safeKind = normalizeText(kind) || inferKind(safeContentType, fileName);
     const targetDir = path.join(config.stateDir, "inbox", dateFolder());
     await fs.mkdir(targetDir, { recursive: true });
     const safeName = sanitizeFileName(fileName, safeContentType, safeKind);
-    const absolutePath = await writeUniqueFile(targetDir, safeName, bytes);
+    const absolutePath = await writeUniqueFile(targetDir, safeName, payload);
     const relativePath = path.relative(config.stateDir, absolutePath).replace(/\\/g, "/");
 
     return {
@@ -457,7 +457,7 @@ function createWebChatChannelAdapter({ config }) {
       absolutePath,
       relativePath,
       path: absolutePath,
-      sizeBytes: bytes.length,
+      sizeBytes: payload.length,
       url: `/api/chat/media?path=${encodeURIComponent(absolutePath)}`,
     };
   }
