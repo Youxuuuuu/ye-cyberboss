@@ -96,7 +96,7 @@ function buildVisibleAssistantRecordFromToolCall({ toolName = "", args = {}, out
     return {
       type: "assistant",
       variant: "visible",
-      text: `Sent file ${fileName}`,
+      text: "",
       meta: {
         attachments: mediaKind === "image" ? [fileItem] : [],
         files: mediaKind === "file" ? [fileItem] : [],
@@ -124,7 +124,7 @@ function buildVisibleAssistantRecordFromToolCall({ toolName = "", args = {}, out
     return {
       type: "assistant",
       variant: "visible",
-      text: `Sent sticker ${descriptor.stickerId}`,
+      text: "",
       meta: {
         attachments: [stickerItem],
         stickers: [stickerItem],

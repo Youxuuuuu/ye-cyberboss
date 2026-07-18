@@ -213,7 +213,11 @@ test("codex import normalizes short operation text, media, prompts, and source l
   const sendFileOperation = dayRecords.find((record) => record.type === "operation" && record.meta.toolName === "cyberboss_channel_send_file")
   assert.equal(sendFileOperation.source.sourceLine, 11)
 
-  const mediaRecord = dayRecords.find((record) => record.type === "assistant" && record.text === "Sent file attachment.png")
+  const mediaRecord = dayRecords.find((record) => (
+    record.type === "assistant"
+    && record.text === ""
+    && record.meta.attachments.some((item) => item.fileName === "attachment.png")
+  ))
   assert.equal(mediaRecord.source.sourceLine, 12)
   assert.equal(mediaRecord.meta.attachments.length, 1)
   assert.equal(mediaRecord.meta.files.length, 0)
@@ -283,7 +287,11 @@ test("claudecode import normalizes tool names, system action mode, and visible m
   assert.equal(sendFileOperation.meta.toolName, "cyberboss_channel_send_file")
   assert.equal(sendFileOperation.meta.toolName.startsWith("mcp__"), false)
 
-  const mediaRecord = dayRecords.find((record) => record.type === "assistant" && record.text === "Sent file attachment.png")
+  const mediaRecord = dayRecords.find((record) => (
+    record.type === "assistant"
+    && record.text === ""
+    && record.meta.attachments.some((item) => item.fileName === "attachment.png")
+  ))
   assert.equal(mediaRecord.meta.attachments.length, 1)
   assert.equal(mediaRecord.meta.attachments[0].relativePath, "inbox/2026-06-23/attachment.png")
 })
@@ -383,7 +391,11 @@ test("codex realtime tails raw session lines, uses real source lines, and dedupe
   assert.equal(userRecord.id.includes(sourceFile), false)
 
   const operation = dayRecords.find((record) => record.type === "operation" && record.meta.toolName === "cyberboss_channel_send_file")
-  const media = dayRecords.find((record) => record.type === "assistant" && record.text === "Sent file attachment.png")
+  const media = dayRecords.find((record) => (
+    record.type === "assistant"
+    && record.text === ""
+    && record.meta.attachments.some((item) => item.fileName === "attachment.png")
+  ))
   const reply = dayRecords.find((record) => record.type === "assistant" && record.text === "codex realtime reply")
 
   assert.equal(operation.source.sourceLine, 4)
@@ -444,13 +456,21 @@ test("claudecode realtime tails transcript once and merges tool_use plus tool_re
   assert.equal(dayRecords.filter((record) => record.type === "thinking" && record.text === "think once").length, 1)
   assert.equal(dayRecords.filter((record) => record.type === "assistant" && record.text === "claude realtime reply").length, 1)
   assert.equal(dayRecords.filter((record) => record.type === "operation" && record.text === "[cyberboss_channel_send_file] attachment.png").length, 1)
-  assert.equal(dayRecords.filter((record) => record.type === "assistant" && record.text === "Sent file attachment.png").length, 1)
+  assert.equal(dayRecords.filter((record) => (
+    record.type === "assistant"
+    && record.text === ""
+    && record.meta.attachments.some((item) => item.fileName === "attachment.png")
+  )).length, 1)
 
   const operation = dayRecords.find((record) => record.type === "operation" && record.text === "[cyberboss_channel_send_file] attachment.png")
   assert.equal(operation.meta.toolName, "cyberboss_channel_send_file")
   assert.equal(operation.source.sourceLine, 2)
 
-  const visible = dayRecords.find((record) => record.type === "assistant" && record.text === "Sent file attachment.png")
+  const visible = dayRecords.find((record) => (
+    record.type === "assistant"
+    && record.text === ""
+    && record.meta.attachments.some((item) => item.fileName === "attachment.png")
+  ))
   assert.equal(visible.source.sourceLine, 3)
 })
 
