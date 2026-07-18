@@ -116,3 +116,37 @@ test("POST /api/chat/uploads streams binary bytes and rejects oversized bodies",
   assert.equal(rejected.status, 413)
   assert.equal(uploads.length, 1)
 })
+
+test("GET /api/chat/media accepts query authentication for browser assets", async (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "webchat-server-media-auth-"))
+  const mediaPath = path.join(stateDir, "inbox", "photo.jpg")
+  fs.mkdirSync(path.dirname(mediaPath), { recursive: true })
+  fs.writeFileSync(mediaPath, "image-bytes", "utf8")
+  const server = createWebChatServer({
+    config: {
+      stateDir,
+      webChatEnabled: true,
+      webChatHost: "127.0.0.1",
+      webChatPort: 0,
+      webChatAllowedOrigins: [],
+      webChatToken: "asset-secret",
+    },
+    app: {
+      getWebChatIdentity() { return { senderId: "user-1" } },
+    },
+    adapter: { getClientCount() { return 0 } },
+  })
+  await server.start()
+  t.after(() => server.close())
+  const address = server.address()
+  const mediaQuery = `path=${encodeURIComponent(mediaPath)}`
+  const baseUrl = `http://127.0.0.1:${address.port}/api/chat/media?${mediaQuery}`
+
+  const anonymous = await fetch(baseUrl)
+  assert.equal(anonymous.status, 401)
+
+  const authenticated = await fetch(`${baseUrl}&token=${encodeURIComponent("asset-secret")}`)
+  assert.equal(authenticated.status, 200)
+  assert.equal(authenticated.headers.get("Cache-Control"), "private, max-age=3600")
+  assert.equal(await authenticated.text(), "image-bytes")
+})
