@@ -150,7 +150,7 @@ test("raw Claude user correlates into the existing web user without a second rec
   }
 })
 
-test("codex import normalizes short operation text, media, prompts, and source lines", () => {
+test("codex import keeps approvals internal while preserving operations, media, prompts, and source lines", () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-codex-import-"))
   const sourceFile = path.join(stateDir, "codex-session.jsonl")
   const inboxFile = path.join(stateDir, "inbox", "2026-06-23", "attachment.png")
@@ -178,6 +178,10 @@ test("codex import normalizes short operation text, media, prompts, and source l
     responseFunctionCall("mcp__cyberboss_tools__cyberboss_channel_send_file", { filePath: toSlash(inboxFile) }, "call-send-file-1"),
     responseFunctionCallOutput("call-send-file-1", JSON.stringify([{ type: "text", text: sendFileText }])),
     responseAssistant("done codex"),
+    responseUser("/yes"),
+    eventUser("/always"),
+    responseUser("<permissions instructions>\ninternal sandbox metadata"),
+    responseUser("yes please"),
   ])
 
   const importer = new ConversationImporter({
@@ -198,6 +202,9 @@ test("codex import normalizes short operation text, media, prompts, and source l
   const dayRecords = readConversationDay(stateDir, "2026-06-14")
 
   assert.equal(dayRecords.filter((record) => record.type === "user" && record.text === "hello codex").length, 1)
+  assert.equal(dayRecords.filter((record) => record.type === "user" && record.text === "yes please").length, 1)
+  assert.equal(dayRecords.some((record) => /^\/(?:yes|always|no)\b/iu.test(record.text)), false)
+  assert.equal(dayRecords.some((record) => record.text.includes("permissions instructions")), false)
   assert.equal(dayRecords.some((record) => record.text.includes("<environment_context>")), false)
   assert.ok(dayRecords.some((record) => (
     record.type === "user"
@@ -225,7 +232,7 @@ test("codex import normalizes short operation text, media, prompts, and source l
   assert.equal(mediaRecord.meta.attachments[0].relativePath, "inbox/2026-06-23/attachment.png")
 })
 
-test("claudecode import normalizes tool names, system action mode, and visible media", () => {
+test("claudecode import keeps approvals internal and preserves operations, system action mode, and visible media", () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-claude-import-"))
   const sourceFile = path.join(stateDir, "claude-session.jsonl")
   const inboxFile = path.join(stateDir, "inbox", "2026-06-23", "attachment.png")
@@ -255,6 +262,10 @@ test("claudecode import normalizes tool names, system action mode, and visible m
       { type: "tool_use", id: "tool-reminder-1", name: "mcp__cyberboss_tools__cyberboss_reminder_create", input: { text: "drink water" } },
     ]),
     claudeToolResult("claude-session-1", "tool-result-2", "tool-reminder-1", "Reminder created"),
+    claudeUser("claude-session-1", "prompt-approval-1", "user-approval-1", "/no"),
+    claudeUser("claude-session-1", "prompt-permission-1", "user-permission-1", "<permissions instructions>\ninternal permission metadata"),
+    claudeUser("claude-session-1", "prompt-ordinary-yes", "user-ordinary-yes", "yes please"),
+    { type: "control_request", request_id: "approval-1", request: { subtype: "can_use_tool", tool_name: "Bash" } },
   ])
 
   const importer = new ConversationImporter({
@@ -272,6 +283,9 @@ test("claudecode import normalizes tool names, system action mode, and visible m
   })
 
   const dayRecords = readConversationDay(stateDir, "2026-06-17")
+  assert.equal(dayRecords.filter((record) => record.type === "user" && record.text === "yes please").length, 1)
+  assert.equal(dayRecords.some((record) => /^\/(?:yes|always|no)\b/iu.test(record.text)), false)
+  assert.equal(dayRecords.some((record) => record.text.includes("permissions instructions")), false)
   assert.equal(dayRecords.some((record) => record.text.includes("WECHAT SESSION INSTRUCTIONS")), false)
   assert.ok(dayRecords.some((record) => (
     record.type === "user"

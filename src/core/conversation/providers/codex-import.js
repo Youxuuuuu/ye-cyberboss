@@ -214,6 +214,7 @@ class CodexImportParser {
           args: operationRecord._operationArgs || {},
         }, this.maxStateEntries)
       }
+      // 审批内容由提示过滤器单独处理；正常工具调用必须保留为可见 operation。
       return [operationRecord]
     }
 

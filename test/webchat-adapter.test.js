@@ -158,6 +158,41 @@ test("runtime correlation events expose protocol-v2 turn identities", () => {
   assert.equal(correlated.canonicalTurnId, "prompt-canonical");
 });
 
+test("webchat publishes silent runtime exits as lifecycle events without visible error text", () => {
+  const adapter = createWebChatChannelAdapter({
+    config: {
+      stateDir: fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-webchat-silent-failure-")),
+      webChatSenderId: "user-silent-failure",
+      allowedUserIds: ["user-silent-failure"],
+      webChatEnabled: true,
+    },
+  });
+
+  const silent = adapter.publishRuntimeEvent({
+    type: "runtime.turn.failed",
+    payload: {
+      threadId: "thread-silent",
+      turnId: "turn-silent",
+      text: "❌ Runtime process exited unexpectedly",
+      silent: true,
+    },
+  });
+  const detailed = adapter.publishRuntimeEvent({
+    type: "runtime.turn.failed",
+    payload: {
+      threadId: "thread-detailed",
+      turnId: "turn-detailed",
+      text: "context window exceeded",
+      silent: false,
+    },
+  });
+
+  assert.equal(silent.kind, "turn.failed");
+  assert.equal(Object.hasOwn(silent, "text"), false);
+  assert.equal(detailed.kind, "error");
+  assert.equal(detailed.text, "context window exceeded");
+});
+
 test("status cursor closes the snapshot-to-subscribe event gap without replaying history", () => {
   const adapter = createWebChatChannelAdapter({
     config: {

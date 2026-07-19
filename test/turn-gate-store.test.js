@@ -446,7 +446,7 @@ test("completed turns flush queued inbound work before system messages", async (
   assert.deepEqual(calls, ["releaseThread", "flushInbound", "flushSystem", "stopTyping"]);
 });
 
-test("failed turns still send error back when thread binding lookup is missing", async () => {
+test("failed turns send detailed errors but keep empty process-exit noise silent", async () => {
   const sent = [];
   const appLike = {
     streamDelivery: {
@@ -507,11 +507,22 @@ test("failed turns still send error back when thread binding lookup is missing",
     },
   });
 
-  assert.deepEqual(sent, [{
-    userId: "user-1",
-    text: "❌ Execution failed\ncontext window exceeded",
-    contextToken: "ctx-1",
-  }]);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].userId, "user-1");
+  assert.equal(sent[0].text, "❌ Execution failed\ncontext window exceeded");
+  assert.equal(sent[0].contextToken, "ctx-1");
+
+  await CyberbossApp.prototype.handleRuntimeEvent.call(appLike, {
+    type: "runtime.turn.failed",
+    payload: {
+      threadId: "thread-1",
+      turnId: "turn-2",
+      text: "❌ Runtime process exited unexpectedly",
+      silent: true,
+    },
+  });
+
+  assert.equal(sent.length, 1);
 });
 
 test("flushPendingInboundMessages batches queued messages from the same scope into one turn", async () => {

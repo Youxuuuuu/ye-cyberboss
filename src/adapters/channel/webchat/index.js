@@ -262,12 +262,14 @@ function createWebChatChannelAdapter({ config }) {
 
     if (event.type === "runtime.turn.failed") {
       return publish({
-        kind: "error",
+        kind: event.payload.silent ? "turn.failed" : "error",
         senderId,
         threadId,
         turnId,
         ...turnIdentity,
-        text: normalizeText(event.payload.text) || "执行失败",
+        ...(event.payload.silent
+          ? {}
+          : { text: normalizeText(event.payload.text) || "执行失败" }),
       });
     }
 

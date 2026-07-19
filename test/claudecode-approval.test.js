@@ -130,6 +130,26 @@ test("claudecode approval events capture Write file paths for state-dir auto app
   assert.deepEqual(event.payload.filePaths, ["/Users/tingyiwen/.cyberboss/notes/today.md"]);
 });
 
+test("claudecode runtime keeps detailed failures visible and marks empty process exits silent", () => {
+  const silentExit = mapClaudeCodeMessageToRuntimeEvent({
+    type: "process.close",
+    sessionId: "thread-1",
+    turnId: "turn-1",
+  });
+  const detailedFailure = mapClaudeCodeMessageToRuntimeEvent({
+    type: "process.error",
+    sessionId: "thread-1",
+    turnId: "turn-2",
+    error: "context window exceeded",
+  });
+
+  assert.equal(silentExit.type, "runtime.turn.failed");
+  assert.equal(silentExit.payload.text, "❌ Runtime process exited unexpectedly");
+  assert.equal(silentExit.payload.silent, true);
+  assert.equal(detailedFailure.payload.text, "context window exceeded");
+  assert.equal(detailedFailure.payload.silent, false);
+});
+
 test("claudecode adapter exposes image file read capability only for known image-capable models", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-claude-vision-"));
   const adapter = createClaudeCodeRuntimeAdapter({

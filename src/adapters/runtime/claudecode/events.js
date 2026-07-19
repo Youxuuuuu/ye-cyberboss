@@ -5,6 +5,8 @@ const {
   buildApprovalMatchTokens,
 } = require("../shared/approval-command");
 
+const RUNTIME_PROCESS_EXIT_NOISE = "❌ Runtime process exited unexpectedly";
+
 function mapClaudeCodeMessageToRuntimeEvent(message, raw) {
   const type = message?.type;
   switch (type) {
@@ -85,15 +87,19 @@ function mapClaudeCodeMessageToRuntimeEvent(message, raw) {
         },
       };
     case "process.error":
-    case "process.close":
+    case "process.close": {
+      const runtimeErrorText = normalizeString(message.error);
+      const silent = !runtimeErrorText || runtimeErrorText === RUNTIME_PROCESS_EXIT_NOISE;
       return {
         type: "runtime.turn.failed",
         payload: {
           threadId: message.sessionId,
           turnId: message.turnId,
-          text: message.error || "❌ Runtime process exited unexpectedly",
+          text: runtimeErrorText || RUNTIME_PROCESS_EXIT_NOISE,
+          silent,
         },
       };
+    }
     case "session.id":
       return null;
     default:

@@ -184,6 +184,7 @@ class ClaudeCodeParser {
           record: operationRecord,
           args: item.input && typeof item.input === "object" ? item.input : {},
         }, this.maxStateEntries)
+        // 审批内容由控制记录过滤器单独处理；正常工具调用必须保留为可见 operation。
         records.push(operationRecord)
       }
     })
