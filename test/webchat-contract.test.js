@@ -4,7 +4,7 @@ const assert = require("node:assert/strict")
 const {
   buildWebChatRequestFingerprint,
   normalizeWebChatSendContract,
-} = require("../src/adapters/channel/webchat/contract")
+} = require("../src/custom/xiaoye/murmurlane/webchat/contract")
 
 test("one web submit normalizes to one request, one message, and stable bubble segments", () => {
   const contract = normalizeWebChatSendContract({

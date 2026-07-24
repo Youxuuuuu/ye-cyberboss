@@ -5,7 +5,7 @@ const path = require("path")
 
 const {
   migrateLegacyWebChatConversationDirectory,
-} = require("../src/core/conversation/migrate-legacy-webchat")
+} = require("../src/custom/xiaoye/conversation/migrate-legacy-webchat")
 
 function main(argv = process.argv.slice(2)) {
   if (argv.includes("--help") || argv.includes("-h")) {
@@ -55,4 +55,3 @@ try {
   process.stderr.write(`[cyberboss] ${error instanceof Error ? error.message : String(error)}\n`)
   process.exitCode = 1
 }
-

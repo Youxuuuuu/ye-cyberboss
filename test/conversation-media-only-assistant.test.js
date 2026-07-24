@@ -4,7 +4,7 @@ const path = require("node:path")
 
 const {
   buildVisibleAssistantRecordFromToolCall,
-} = require("../src/core/conversation/normalize-operation")
+} = require("../src/custom/xiaoye/conversation/normalize-operation")
 
 test("assistant file, image, and sticker tool results normalize as media-only records", () => {
   const stateDir = path.resolve("D:/state")

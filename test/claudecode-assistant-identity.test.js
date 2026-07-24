@@ -3,7 +3,7 @@ const assert = require("node:assert/strict")
 
 const { ClaudeCodeProcessClient } = require("../src/adapters/runtime/claudecode/process-client")
 const { mapClaudeCodeMessageToRuntimeEvent } = require("../src/adapters/runtime/claudecode/events")
-const { ClaudeCodeParser } = require("../src/core/conversation/providers/claudecode-import")
+const { ClaudeCodeParser } = require("../src/custom/xiaoye/conversation/providers/claudecode-import")
 
 test("Claude live completion keeps the native assistant message block identity", () => {
   const client = new ClaudeCodeProcessClient({ cwd: "D:\\study\\cyberboss" })

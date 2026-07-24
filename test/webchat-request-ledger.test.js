@@ -4,7 +4,7 @@ const fs = require("node:fs")
 const os = require("node:os")
 const path = require("node:path")
 
-const { WebChatRequestLedger } = require("../src/adapters/channel/webchat/request-ledger")
+const { WebChatRequestLedger } = require("../src/custom/xiaoye/murmurlane/webchat/request-ledger")
 
 test("concurrent and completed retries dispatch a request only once", async () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "webchat-request-ledger-"))

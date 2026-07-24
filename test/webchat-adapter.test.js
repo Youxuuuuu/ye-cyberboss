@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { createWebChatChannelAdapter } = require("../src/adapters/channel/webchat");
+const { createWebChatChannelAdapter } = require("../src/custom/xiaoye/murmurlane/webchat");
 
 function createResponse() {
   const writes = [];

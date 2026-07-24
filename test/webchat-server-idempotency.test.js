@@ -4,7 +4,7 @@ const fs = require("node:fs")
 const os = require("node:os")
 const path = require("node:path")
 
-const { createWebChatServer } = require("../src/adapters/channel/webchat/server")
+const { createWebChatServer } = require("../src/custom/xiaoye/murmurlane/webchat/server")
 
 test("POST /api/chat/messages dispatches the same requestId once", async (t) => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "webchat-server-idempotency-"))

@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const { CyberbossApp } = require("../src/core/app");
-const { resolveEventAfter } = require("../src/adapters/channel/webchat/server");
+const { resolveEventAfter } = require("../src/custom/xiaoye/murmurlane/webchat/server");
 
 test("SSE reconnect uses the maximum of query after and Last-Event-ID", () => {
   assert.equal(resolveEventAfter("41", "73"), 73);

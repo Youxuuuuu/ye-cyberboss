@@ -7,7 +7,7 @@ const path = require("path")
 const {
   migrateLegacyWebChatConversationDirectory,
   planLegacyWebChatRecords,
-} = require("../src/core/conversation/migrate-legacy-webchat")
+} = require("../src/custom/xiaoye/conversation/migrate-legacy-webchat")
 
 test("legacy web segments plus one runtime user become one stable logical message", () => {
   const records = [
@@ -168,4 +168,3 @@ function readJsonl(filePath) {
     .filter(Boolean)
     .map((line) => JSON.parse(line))
 }
-

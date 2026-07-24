@@ -12,7 +12,7 @@ const { ensureStickerCatalogFilesSync } = require("./services/sticker-service");
 const { createProjectTooling } = require("./tools/create-project-tooling");
 const { runToolMcpServer } = require("./tools/mcp-stdio-server");
 const { normalizeWorkspaceRoot } = require("./core/workspace-root");
-const { ConversationImporter } = require("./core/conversation");
+const { ConversationImporter } = require("./custom/xiaoye/conversation");
 
 function ensureDefaultStateDirectory() {
   fs.mkdirSync(path.join(os.homedir(), ".cyberboss"), { recursive: true });

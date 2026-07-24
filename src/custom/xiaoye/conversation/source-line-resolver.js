@@ -2,7 +2,7 @@ const fs = require("fs")
 const os = require("os")
 const path = require("path")
 
-const { normalizeWorkspaceRoot } = require("../workspace-root")
+const { normalizeWorkspaceRoot } = require("../../../core/workspace-root")
 
 class ConversationSourceLineResolver {
   constructor({ codexHome = "", claudeConfigDir = "", maxEntries = 1024 } = {}) {

@@ -8,8 +8,8 @@ const {
   ConversationArchive,
   ConversationImporter,
   ConversationWriter,
-} = require("../src/core/conversation")
-const { ConversationSourceLineResolver } = require("../src/core/conversation/source-line-resolver")
+} = require("../src/custom/xiaoye/conversation")
+const { ConversationSourceLineResolver } = require("../src/custom/xiaoye/conversation/source-line-resolver")
 
 const WORKSPACE_ROOT = "D:\\study\\cyberboss"
 

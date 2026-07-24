@@ -9,7 +9,7 @@ const { normalizeConversationRecord } = require("../normalize-record")
 const { normalizeMediaList } = require("../normalize-media")
 const { normalizeToolName } = require("../normalize-tool-call")
 const { normalizeTimestamp } = require("../normalize-time")
-const { buildClaudeAssistantItemId } = require("../../../adapters/runtime/claudecode/assistant-identity")
+const { buildClaudeAssistantItemId } = require("../../../../adapters/runtime/claudecode/assistant-identity")
 
 class ClaudeCodeParser {
   constructor({ mode = "import", stateDir = "", maxStateEntries = 5000 } = {}) {
