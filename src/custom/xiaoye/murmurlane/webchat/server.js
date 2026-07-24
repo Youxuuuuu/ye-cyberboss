@@ -5,7 +5,7 @@ const { URL } = require("url");
 const { buildWebChatRequestFingerprint, normalizeWebChatSendContract } = require("./contract");
 const { WebChatRequestLedger } = require("./request-ledger");
 
-function createWebChatServer({ config, app, adapter }) {
+function createWebChatServer({ config, chatService, adapter }) {
   let server = null;
   const requestLedger = new WebChatRequestLedger({
     filePath: config.webChatRequestLedgerFile
@@ -84,7 +84,7 @@ function createWebChatServer({ config, app, adapter }) {
       return;
     }
     if (!authorize(request, url, response, config.webChatToken)) return;
-    const identity = app.getWebChatIdentity();
+    const identity = chatService.getWebChatIdentity();
     if (!identity?.senderId) {
       sendJson(response, 503, { error: "web chat sender is not configured" });
       return;
@@ -115,7 +115,7 @@ function createWebChatServer({ config, app, adapter }) {
     if (request.method === "GET" && url.pathname === "/api/chat/status") {
       const requestId = normalizeText(url.searchParams.get("requestId"));
       sendJson(response, 200, {
-        ...app.getWebChatStatus({
+        ...chatService.getWebChatStatus({
         senderId: identity.senderId,
         threadId: url.searchParams.get("threadId") || "",
         }),
@@ -125,7 +125,7 @@ function createWebChatServer({ config, app, adapter }) {
     }
 
     if (request.method === "GET" && url.pathname === "/api/chat/models") {
-      sendJson(response, 200, await app.getWebChatModels({ senderId: identity.senderId }));
+      sendJson(response, 200, await chatService.getWebChatModels({ senderId: identity.senderId }));
       return;
     }
 
@@ -144,7 +144,7 @@ function createWebChatServer({ config, app, adapter }) {
       const result = await requestLedger.execute({
         requestId: contract.requestId,
         fingerprint,
-        run: () => app.handleWebChatMessages({
+        run: () => chatService.handleWebChatMessages({
           ...body,
           ...contract,
           senderId: identity.senderId,
@@ -168,7 +168,7 @@ function createWebChatServer({ config, app, adapter }) {
 
     if (request.method === "POST" && url.pathname === "/api/chat/model") {
       const body = await readJsonBody(request, 256 * 1024);
-      sendJson(response, 200, await app.setWebChatModel({
+      sendJson(response, 200, await chatService.setWebChatModel({
         ...body,
         senderId: identity.senderId,
       }));
@@ -177,7 +177,7 @@ function createWebChatServer({ config, app, adapter }) {
 
     if (request.method === "POST" && url.pathname === "/api/chat/thread/select") {
       const body = await readJsonBody(request, 256 * 1024);
-      sendJson(response, 200, await app.selectWebChatThread({
+      sendJson(response, 200, await chatService.selectWebChatThread({
         ...body,
         senderId: identity.senderId,
       }));

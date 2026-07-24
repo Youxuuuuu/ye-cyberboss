@@ -1,23 +1,24 @@
 const test = require("node:test")
 const assert = require("node:assert/strict")
+const fs = require("node:fs")
+const os = require("node:os")
+const path = require("node:path")
 
-const { CyberbossApp } = require("../src/core/app")
+const { createXiaoyeModules } = require("../src/custom/xiaoye")
 
-test("recordConversationInbound archives and publishes one merged web user", () => {
-  const archived = []
-  const published = []
-  const app = {
-    conversationArchive: {
-      recordMergedWebInbound(prepared, context) {
-        archived.push({ prepared, context })
-        return { writtenCount: 1, warnings: [] }
-      },
+test("xiaoye modules archive and publish one merged web user", (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-xiaoye-inbound-"))
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
+  const modules = createXiaoyeModules({
+    config: {
+      stateDir,
+      conversationDir: path.join(stateDir, "conversations"),
+      webChatEnabled: false,
+      webChatHost: "127.0.0.1",
+      webChatPort: 0,
     },
-    webChatAdapter: {
-      publishInbound(input) { published.push(input) },
-    },
-    logConversationArchiveWarnings() {},
-  }
+    cyberbossPort: createFakeCyberbossPort(),
+  })
   const prepared = {
     provider: "web",
     requestId: "request-1",
@@ -36,14 +37,27 @@ test("recordConversationInbound archives and publishes one merged web user", () 
     ],
   }
 
-  CyberbossApp.prototype.recordConversationInbound.call(app, prepared, {
+  const result = modules.recordInbound(prepared, {
     runtimeId: "claudecode",
     threadId: "thread-1",
     turnId: "transport-1",
   })
 
-  assert.equal(archived.length, 1)
-  assert.equal(archived[0].prepared.messageId, "message-1")
+  assert.equal(result.writtenCount, 1)
+  const published = modules.murmurlane.adapter
+    .getRecentEvents(0)
+    .filter((event) => event.kind === "message")
   assert.equal(published.length, 1)
-  assert.equal(published[0].prepared.messageId, "message-1")
+  assert.equal(published[0].record.messageId, "message-1")
 })
+
+function createFakeCyberbossPort() {
+  return {
+    getWebChatIdentity() { return { senderId: "user-1" } },
+    getWebChatStatus() { return { connected: true } },
+    async getWebChatModels() { return { models: [] } },
+    async setWebChatModel() { return { connected: true } },
+    async selectWebChatThread() { return { connected: true } },
+    async handleWebChatMessages() { return { accepted: true } },
+  }
+}

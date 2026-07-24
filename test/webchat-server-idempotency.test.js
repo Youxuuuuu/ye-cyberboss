@@ -9,7 +9,7 @@ const { createWebChatServer } = require("../src/custom/xiaoye/murmurlane/webchat
 test("POST /api/chat/messages dispatches the same requestId once", async (t) => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "webchat-server-idempotency-"))
   let dispatchCount = 0
-  const app = {
+  const chatService = {
     getWebChatIdentity() { return { senderId: "user-1" } },
     async handleWebChatMessages(input) {
       dispatchCount += 1
@@ -29,7 +29,7 @@ test("POST /api/chat/messages dispatches the same requestId once", async (t) => 
       webChatPort: 0,
       webChatAllowedOrigins: [],
     },
-    app,
+    chatService,
     adapter: { getClientCount() { return 0 } },
   })
   await server.start()
@@ -72,7 +72,7 @@ test("POST /api/chat/uploads streams binary bytes and rejects oversized bodies",
       webChatAllowedOrigins: [],
       webChatMaxUploadBytes: 8,
     },
-    app: {
+    chatService: {
       getWebChatIdentity() { return { senderId: "user-1" } },
     },
     adapter: {
@@ -131,7 +131,7 @@ test("GET /api/chat/media accepts query authentication for browser assets", asyn
       webChatAllowedOrigins: [],
       webChatToken: "asset-secret",
     },
-    app: {
+    chatService: {
       getWebChatIdentity() { return { senderId: "user-1" } },
     },
     adapter: { getClientCount() { return 0 } },

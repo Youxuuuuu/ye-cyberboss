@@ -3,9 +3,8 @@ const path = require("path");
 const crypto = require("crypto");
 const fs = require("fs");
 const { createWeixinChannelAdapter } = require("../adapters/channel/weixin");
-const { createWebChatChannelAdapter } = require("../custom/xiaoye/murmurlane/webchat");
-const { createWebChatServer } = require("../custom/xiaoye/murmurlane/webchat/server");
 const { normalizeWebChatSendContract } = require("../custom/xiaoye/murmurlane/webchat/contract");
+const { createXiaoyeModules } = require("../custom/xiaoye");
 const { createChannelRouter } = require("../adapters/channel/router");
 const { DEFAULT_MIN_WEIXIN_CHUNK, MAX_MIN_WEIXIN_CHUNK } = require("../adapters/channel/weixin/config-store");
 const { persistIncomingWeixinAttachments } = require("../adapters/channel/weixin/media-receive");
@@ -35,7 +34,6 @@ const { SystemMessageQueueStore } = require("./system-message-queue-store");
 const { SystemMessageDispatcher } = require("./system-message-dispatcher");
 const { TimelineScreenshotQueueStore } = require("./timeline-screenshot-queue-store");
 const { TurnGateStore } = require("./turn-gate-store");
-const { createConversationArchive } = require("../custom/xiaoye/conversation");
 const { normalizeWorkspaceRoot } = require("./workspace-root");
 const { ReminderQueueStore } = require("../adapters/channel/weixin/reminder-queue-store");
 const {
@@ -68,15 +66,15 @@ class CyberbossApp {
   constructor(config) {
     this.config = config;
     this.weixinChannelAdapter = createWeixinChannelAdapter(config);
-    this.webChatAdapter = createWebChatChannelAdapter({ config });
+    this.xiaoye = createXiaoyeModules({
+      config,
+      cyberbossPort: this.createXiaoyeCyberbossPort(),
+    });
+    this.webChatAdapter = this.xiaoye.murmurlane.adapter;
+    this.webChatServer = this.xiaoye.murmurlane.server;
     this.channelAdapter = createChannelRouter({
       weixin: this.weixinChannelAdapter,
       web: this.webChatAdapter,
-    });
-    this.webChatServer = createWebChatServer({
-      config,
-      app: this,
-      adapter: this.webChatAdapter,
     });
     this.timelineIntegration = createTimelineIntegration(config);
     const projectTooling = createProjectTooling(config, {
@@ -98,7 +96,6 @@ class CyberbossApp {
     this.pendingImageInboundByScope = new Map();
     this.turnBoundaryScopeKeys = new Set();
     this.systemMessageDispatcher = null;
-    this.conversationArchive = createConversationArchive({ config });
     this.streamDelivery = new StreamDelivery({
       channelAdapter: this.channelAdapter,
       sessionStore: this.runtimeAdapter.getSessionStore(),
@@ -111,13 +108,7 @@ class CyberbossApp {
       this.runtimeEventChain = this.runtimeEventChain
         .catch(() => {})
         .then(() => {
-          if (event) {
-            this.webChatAdapter.publishRuntimeEvent(event);
-          }
-          if (event) {
-            this.threadStateStore.applyRuntimeEvent(event);
-          }
-          this.recordConversationRuntimeRaw(event, raw);
+          this.xiaoye.handleRuntimeEvent(event, raw);
           if (event) {
             return this.handleRuntimeEvent(event);
           }
@@ -128,6 +119,20 @@ class CyberbossApp {
           console.error(`[cyberboss] runtime event handling failed type=${event?.type || "(unknown)"} ${message}`);
         });
     });
+  }
+
+  createXiaoyeCyberbossPort() {
+    return {
+      getWebChatIdentity: (...args) => this.getWebChatIdentity(...args),
+      getWebChatStatus: (...args) => this.getWebChatStatus(...args),
+      getWebChatModels: (...args) => this.getWebChatModels(...args),
+      setWebChatModel: (...args) => this.setWebChatModel(...args),
+      selectWebChatThread: (...args) => this.selectWebChatThread(...args),
+      handleWebChatMessages: (...args) => this.handleWebChatMessages(...args),
+      applyRuntimeEventToThreadState: (event) => this.threadStateStore.applyRuntimeEvent(event),
+      getRuntimeId: () => this.runtimeAdapter.describe().id,
+      resolveConversationWorkspaceRoot: (event) => this.resolveConversationWorkspaceRoot(event),
+    };
   }
 
   printDoctor() {
@@ -157,7 +162,7 @@ class CyberbossApp {
       accountId: account.accountId,
     });
     const runtimeState = await this.runtimeAdapter.initialize();
-    await this.webChatServer?.start();
+    await this.xiaoye.start();
     const knownContextTokens = Object.keys(this.channelAdapter.getKnownContextTokens()).length;
     const syncBuffer = this.channelAdapter.loadSyncBuffer();
     await this.restoreBoundThreadSubscriptions();
@@ -189,8 +194,7 @@ class CyberbossApp {
 
     const shutdown = createShutdownController(async () => {
       this.clearPendingImageInboundTimers();
-      this.conversationArchive?.close?.();
-      await this.webChatServer?.close();
+      await this.xiaoye.close();
       await this.closeLocationServer();
       await this.runtimeAdapter.close();
     });
@@ -241,8 +245,7 @@ class CyberbossApp {
     } finally {
       shutdown.dispose();
       this.clearPendingImageInboundTimers();
-      this.conversationArchive?.close?.();
-      await this.webChatServer?.close();
+      await this.xiaoye.close();
       await this.closeLocationServer();
       await this.runtimeAdapter.close();
     }
@@ -729,14 +732,14 @@ class CyberbossApp {
     const pendingScopeKey = this.turnGateStore.begin(bindingKey, workspaceRoot);
     const currentThreadId = this.runtimeAdapter.getSessionStore().getThreadIdForWorkspace(bindingKey, workspaceRoot) || "";
     if (prepared.provider === "web") {
-      this.recordConversationInbound(prepared, {
+      this.xiaoye.recordInbound(prepared, {
         runtimeId: this.runtimeAdapter.describe().id,
         threadId: currentThreadId,
         turnId: prepared.logicalTurnId || "",
         workspaceRoot,
       });
     } else {
-      this.recordConversationInbound(prepared, {
+      this.xiaoye.recordInbound(prepared, {
         runtimeId: this.runtimeAdapter.describe().id,
         threadId: currentThreadId,
         turnId: "",
@@ -796,7 +799,7 @@ class CyberbossApp {
           previousThreadId: currentThreadId,
           clientId: prepared.clientId || "",
         });
-        this.recordConversationInbound(prepared, {
+        this.xiaoye.recordInbound(prepared, {
           runtimeId: this.runtimeAdapter.describe().id,
           threadId: turn.threadId,
           turnId: turn.turnId || "",
@@ -1829,44 +1832,6 @@ class CyberbossApp {
   resolveWorkspaceRoot(bindingKey) {
     const sessionStore = this.runtimeAdapter.getSessionStore();
     return sessionStore.getActiveWorkspaceRoot(bindingKey) || normalizeWorkspaceRoot(this.config.workspaceRoot);
-  }
-
-  recordConversationInbound(prepared, context = {}, { publish = true } = {}) {
-    try {
-      const result = prepared?.provider === "web" && typeof this.conversationArchive?.recordMergedWebInbound === "function"
-        ? this.conversationArchive.recordMergedWebInbound(prepared, context)
-        : this.conversationArchive?.recordInboundMessage(prepared, context);
-      this.logConversationArchiveWarnings(result?.warnings);
-      if (prepared?.provider === "web" && publish) {
-        this.webChatAdapter.publishInbound({
-          prepared,
-          threadId: context.threadId || "",
-          turnId: context.turnId || "",
-        });
-      }
-    } catch (error) {
-      console.warn(`[cyberboss] conversation inbound archive failed: ${formatErrorMessage(error)}`);
-    }
-  }
-
-  recordConversationRuntimeRaw(event, raw) {
-    try {
-      const result = this.conversationArchive?.recordRuntimeRaw({
-        runtimeId: this.runtimeAdapter.describe().id,
-        raw,
-        mappedEvent: event,
-        workspaceRoot: this.resolveConversationWorkspaceRoot(event),
-      });
-      this.logConversationArchiveWarnings(result?.warnings);
-    } catch (error) {
-      console.warn(`[cyberboss] conversation runtime archive failed: ${formatErrorMessage(error)}`);
-    }
-  }
-
-  logConversationArchiveWarnings(warnings = []) {
-    for (const warning of Array.isArray(warnings) ? warnings : []) {
-      console.warn(`[cyberboss] conversation archive warning: ${warning}`);
-    }
   }
 
   resolveConversationWorkspaceRoot(event) {
