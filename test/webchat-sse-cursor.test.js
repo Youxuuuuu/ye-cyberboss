@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { CyberbossApp } = require("../src/core/app");
+const { createMurmurLaneChatService } = require("../src/custom/xiaoye/murmurlane/chat-service");
 const { resolveEventAfter } = require("../src/custom/xiaoye/murmurlane/webchat/server");
 
 test("SSE reconnect uses the maximum of query after and Last-Event-ID", () => {
@@ -12,37 +12,46 @@ test("SSE reconnect uses the maximum of query after and Last-Event-ID", () => {
 
 test("chat status returns the cursor from the web adapter source for the selected thread", () => {
   const cursorCalls = [];
-  const status = CyberbossApp.prototype.getWebChatStatus.call({
-    config: { webChatEnabled: true },
-    resolveWebChatContext() {
-      return {
-        senderId: "user-status",
-        workspaceId: "workspace-status",
-        bindingKey: "binding-status",
-        workspaceRoot: "D:\\study\\cyberboss",
-      };
+  const sessionStore = {
+    buildBindingKey() { return "binding-status"; },
+    getThreadIdForWorkspace() { return "thread-default"; },
+    getRuntimeParamsForWorkspace() { return {}; },
+  };
+  const service = createMurmurLaneChatService({
+    config: {
+      webChatEnabled: true,
+      workspaceId: "workspace-status",
+      workspaceRoot: "D:\\study\\cyberboss",
+      accountId: "account-status",
+      webChatSenderId: "user-status",
     },
-    runtimeAdapter: {
-      getSessionStore() {
-        return {
-          getThreadIdForWorkspace() { return "thread-default"; },
-          getRuntimeParamsForWorkspace() { return {}; },
-        };
-      },
-      describe() { return { id: "claudecode", model: "model-status" }; },
-    },
-    threadStateStore: {
-      getThreadState() { return null; },
-      getLatestContext() { return null; },
-    },
-    webChatAdapter: {
+    adapter: {
       getClientCount() { return 1; },
       getEventCursor(scope) {
         cursorCalls.push(scope);
         return 1234;
       },
     },
-  }, {
+    cyberbossPort: {
+      resolveWeixinAccount() { return null; },
+      getActiveAccountId() { return "account-status"; },
+      getRuntimeAdapter() {
+        return {
+          getSessionStore() { return sessionStore; },
+          describe() { return { id: "claudecode", model: "model-status" }; },
+        };
+      },
+      getThreadStateStore() {
+        return {
+          getThreadState() { return null; },
+          getLatestContext() { return null; },
+        };
+      },
+      resolveWorkspaceRoot() { return "D:\\study\\cyberboss"; },
+      async routePreparedInbound() { return null; },
+    },
+  });
+  const status = service.getWebChatStatus({
     senderId: "user-status",
     threadId: "thread-selected",
   });

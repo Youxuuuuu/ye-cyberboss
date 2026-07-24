@@ -3,7 +3,10 @@ const { createMurmurLaneModule } = require("./murmurlane")
 
 function createXiaoyeModules({ config, cyberbossPort } = {}) {
   const conversation = createConversationArchive({ config })
-  const murmurlane = createMurmurLaneModule({ config, cyberbossPort })
+  const murmurlane = createMurmurLaneModule({
+    config,
+    cyberbossPort: createMurmurLanePort(cyberbossPort),
+  })
 
   return {
     conversation,
@@ -53,6 +56,17 @@ function createXiaoyeModules({ config, cyberbossPort } = {}) {
         return null
       }
     },
+  }
+}
+
+function createMurmurLanePort(cyberbossPort) {
+  return {
+    resolveWeixinAccount: (...args) => cyberbossPort.resolveWeixinAccount(...args),
+    getActiveAccountId: (...args) => cyberbossPort.getActiveAccountId(...args),
+    getRuntimeAdapter: (...args) => cyberbossPort.getRuntimeAdapter(...args),
+    getThreadStateStore: (...args) => cyberbossPort.getThreadStateStore(...args),
+    resolveWorkspaceRoot: (...args) => cyberbossPort.resolveWorkspaceRoot(...args),
+    routePreparedInbound: (...args) => cyberbossPort.routePreparedInbound(...args),
   }
 }
 

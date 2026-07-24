@@ -53,11 +53,11 @@ test("xiaoye modules archive and publish one merged web user", (t) => {
 
 function createFakeCyberbossPort() {
   return {
-    getWebChatIdentity() { return { senderId: "user-1" } },
-    getWebChatStatus() { return { connected: true } },
-    async getWebChatModels() { return { models: [] } },
-    async setWebChatModel() { return { connected: true } },
-    async selectWebChatThread() { return { connected: true } },
-    async handleWebChatMessages() { return { accepted: true } },
+    resolveWeixinAccount() { return null },
+    getActiveAccountId() { return "" },
+    getRuntimeAdapter() { return {} },
+    getThreadStateStore() { return {} },
+    resolveWorkspaceRoot() { return "" },
+    async routePreparedInbound() { return null },
   }
 }
