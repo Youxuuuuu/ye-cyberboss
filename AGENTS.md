@@ -9,8 +9,10 @@
 ## 稳定所有权
 
 - `src/core/inbound-turn.js` 负责把渠道输入整理为统一的 Inbound Turn。
-- `src/core/conversation/` 负责生成、规范化和持久化派生的 Conversation Record。
-- `src/adapters/channel/webchat/` 负责 WebChat HTTP、SSE、上传和请求幂等传输。
+- `src/custom/xiaoye/conversation/` 负责生成、规范化和持久化派生的 Conversation Record。
+- `src/custom/xiaoye/murmurlane/webchat/` 负责 WebChat HTTP、SSE、上传和请求幂等传输。
+- `src/custom/xiaoye/murmurlane/chat-service.js` 负责 MurmurLane 所需的聊天应用行为；HTTP Server 只依赖这份窄接口，不得直接依赖整个 `CyberbossApp`。
+- `src/custom/xiaoye/index.js` 是自定义模块的组合根。自定义模块与 Cyberboss 核心之间的新依赖必须先收敛到这里的 `cyberbossPort`。
 - 渠道 Adapter 负责渠道特有行为；跨渠道语义应先进入统一模型，再交给 Runtime 或 Conversation。
 - `CyberbossApp` 是启动与装配入口。新增能力不应默认继续扩大它的公开 `interface`；先判断是否存在可复用的真实 `seam`。
 
