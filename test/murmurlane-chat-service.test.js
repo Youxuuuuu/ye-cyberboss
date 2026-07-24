@@ -1,6 +1,15 @@
 const assert = require("node:assert/strict")
+const fs = require("node:fs")
+const os = require("node:os")
+const path = require("node:path")
 const test = require("node:test")
 
+const {
+  buildInboundDraft,
+  buildMergedInboundPrepared,
+} = require("../src/core/inbound-turn")
+const { normalizeWorkspaceRoot } = require("../src/core/workspace-root")
+const { isPathWithinRoot } = require("../src/adapters/runtime/shared/approval-command")
 const { createMurmurLaneChatService } = require("../src/custom/xiaoye/murmurlane/chat-service")
 
 test("murmurlane chat service resolves identity and status through the narrow cyberboss port", () => {
@@ -88,3 +97,259 @@ test("murmurlane chat service resolves identity and status through the narrow cy
     threadId: "thread-1",
   }])
 })
+
+test("murmurlane chat service sends an image attachment inside the state directory", async (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-chat-image-"))
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
+  const imagePath = path.join(stateDir, "uploads", "test.png")
+  fs.mkdirSync(path.dirname(imagePath), { recursive: true })
+  fs.writeFileSync(imagePath, Buffer.from("test-image"))
+  const harness = createAttachmentHarness({ stateDir })
+
+  await harness.service.handleWebChatMessages({
+    messages: [{
+      messageId: "message-image",
+      text: "",
+      attachments: [{
+        kind: "image",
+        absolutePath: imagePath,
+        fileName: "test.png",
+        contentType: "image/png",
+      }],
+    }],
+  })
+
+  assert.equal(harness.routeCalls.length, 1)
+  const attachment = harness.routeCalls[0].prepared.attachments[0]
+  assert.equal(attachment.kind, "image")
+  assert.equal(attachment.absolutePath, path.resolve(imagePath))
+  assert.equal(attachment.relativePath, "uploads/test.png")
+  assert.ok(harness.pathValidationCalls.length >= 1)
+  assert.ok(harness.pathValidationCalls.every((call) => (
+    call.candidate === path.resolve(imagePath)
+    && call.root === path.resolve(stateDir)
+  )))
+})
+
+test("murmurlane chat service preserves a file attachment when submitting inbound", async (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-chat-file-"))
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
+  const filePath = path.join(stateDir, "uploads", "notes.txt")
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  fs.writeFileSync(filePath, "hello")
+  const harness = createAttachmentHarness({ stateDir })
+
+  await harness.service.handleWebChatMessages({
+    messages: [{
+      messageId: "message-file",
+      text: "",
+      attachments: [{
+        kind: "file",
+        absolutePath: filePath,
+        fileName: "notes.txt",
+        contentType: "text/plain",
+      }],
+    }],
+  })
+
+  assert.equal(harness.routeCalls.length, 1)
+  assert.deepEqual(
+    pickAttachmentFields(harness.routeCalls[0].prepared.attachments[0]),
+    {
+      kind: "file",
+      fileName: "notes.txt",
+      contentType: "text/plain",
+      relativePath: "uploads/notes.txt",
+    },
+  )
+})
+
+test("murmurlane chat service sends a sticker through the attachment path", async (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-chat-sticker-"))
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
+  const stickerPath = path.join(stateDir, "uploads", "sticker.gif")
+  fs.mkdirSync(path.dirname(stickerPath), { recursive: true })
+  fs.writeFileSync(stickerPath, Buffer.from("test-sticker"))
+  const harness = createAttachmentHarness({ stateDir })
+
+  await harness.service.handleWebChatMessages({
+    messages: [{
+      messageId: "message-sticker",
+      text: "",
+      attachments: [{
+        kind: "sticker",
+        absolutePath: stickerPath,
+        fileName: "sticker.gif",
+        contentType: "image/gif",
+      }],
+    }],
+  })
+
+  assert.equal(harness.routeCalls.length, 1)
+  assert.deepEqual(
+    pickAttachmentFields(harness.routeCalls[0].prepared.attachments[0]),
+    {
+      kind: "sticker",
+      fileName: "sticker.gif",
+      contentType: "image/gif",
+      relativePath: "uploads/sticker.gif",
+    },
+  )
+  assert.ok(harness.pathValidationCalls.length >= 1)
+})
+
+test("murmurlane chat service validates an attachment inside a bubble segment", async (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-chat-segment-"))
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
+  const imagePath = path.join(stateDir, "uploads", "segment.png")
+  fs.mkdirSync(path.dirname(imagePath), { recursive: true })
+  fs.writeFileSync(imagePath, Buffer.from("segment-image"))
+  const harness = createAttachmentHarness({ stateDir })
+
+  await harness.service.handleWebChatMessages({
+    messages: [{
+      messageId: "message-segment",
+      text: "",
+      bubbleSegments: [{
+        segmentId: "segment-1",
+        text: "",
+        attachments: [{
+          kind: "image",
+          absolutePath: imagePath,
+          fileName: "segment.png",
+          contentType: "image/png",
+        }],
+      }],
+    }],
+  })
+
+  assert.equal(harness.routeCalls.length, 1)
+  const prepared = harness.routeCalls[0].prepared
+  const segmentAttachment = prepared.sourceMessages[0].bubbleSegments[0].attachments[0]
+  assert.equal(segmentAttachment.absolutePath, path.resolve(imagePath))
+  assert.equal(segmentAttachment.relativePath, "uploads/segment.png")
+  assert.ok(harness.pathValidationCalls.some((call) => call.candidate === path.resolve(imagePath)))
+})
+
+test("murmurlane chat service rejects an attachment outside the state directory", async (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-chat-root-"))
+  const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-chat-outside-"))
+  t.after(() => {
+    fs.rmSync(stateDir, { recursive: true, force: true })
+    fs.rmSync(outsideDir, { recursive: true, force: true })
+  })
+  const outsidePath = path.join(outsideDir, "outside.txt")
+  fs.writeFileSync(outsidePath, "outside")
+  const harness = createAttachmentHarness({ stateDir })
+
+  await assert.rejects(
+    () => harness.service.handleWebChatMessages({
+      messages: [{
+        messageId: "message-outside",
+        text: "",
+        attachments: [{
+          kind: "file",
+          absolutePath: outsidePath,
+          fileName: "outside.txt",
+          contentType: "text/plain",
+        }],
+      }],
+    }),
+    { message: "web attachment path is outside the Cyberboss state directory" },
+  )
+
+  assert.equal(harness.routeCalls.length, 0)
+  assert.ok(harness.pathValidationCalls.some((call) => call.candidate === path.resolve(outsidePath)))
+})
+
+test("murmurlane chat service keeps a link attachment without local path validation", async (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-chat-link-"))
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
+  const harness = createAttachmentHarness({ stateDir })
+
+  await harness.service.handleWebChatMessages({
+    messages: [{
+      messageId: "message-link",
+      text: "",
+      attachments: [{
+        kind: "link",
+        url: "https://example.com/file",
+      }],
+    }],
+  })
+
+  assert.equal(harness.routeCalls.length, 1)
+  assert.deepEqual(harness.routeCalls[0].prepared.attachments[0], {
+    kind: "link",
+    url: "https://example.com/file",
+    path: "https://example.com/file",
+    absolutePath: "https://example.com/file",
+    fileName: "https://example.com/file",
+    contentType: "text/uri-list",
+  })
+  assert.equal(harness.pathValidationCalls.length, 0)
+})
+
+function createAttachmentHarness({ stateDir }) {
+  const routeCalls = []
+  const pathValidationCalls = []
+  const sessionStore = {
+    buildBindingKey() { return "workspace-1:account-1:user-1" },
+    getThreadIdForWorkspace() { return "thread-1" },
+    getRuntimeParamsForWorkspace() { return {} },
+  }
+  const service = createMurmurLaneChatService({
+    config: {
+      stateDir,
+      workspaceId: "workspace-1",
+      workspaceRoot: stateDir,
+      accountId: "account-1",
+      webChatSenderId: "user-1",
+      webChatEnabled: true,
+    },
+    adapter: {
+      getClientCount() { return 0 },
+      getEventCursor() { return 0 },
+      setActiveTarget() {},
+    },
+    cyberbossPort: {
+      resolveWeixinAccount() { return null },
+      getActiveAccountId() { return "account-1" },
+      getRuntimeAdapter() {
+        return {
+          getSessionStore() { return sessionStore },
+          describe() { return { id: "codex" } },
+        }
+      },
+      getThreadStateStore() {
+        return {
+          getThreadState() { return null },
+          getLatestContext() { return null },
+        }
+      },
+      resolveWorkspaceRoot() { return stateDir },
+      async routePreparedInbound(payload) {
+        routeCalls.push(payload)
+        return { accepted: true, threadId: "thread-1", turnId: "turn-1" }
+      },
+      findModelByQuery() { return null },
+      isPathWithinRoot(candidate, root) {
+        pathValidationCalls.push({ candidate, root })
+        return isPathWithinRoot(candidate, root)
+      },
+      buildInboundDraft,
+      buildMergedInboundPrepared,
+      normalizeWorkspaceRoot,
+    },
+  })
+  return { service, routeCalls, pathValidationCalls }
+}
+
+function pickAttachmentFields(attachment) {
+  return {
+    kind: attachment.kind,
+    fileName: attachment.fileName,
+    contentType: attachment.contentType,
+    relativePath: attachment.relativePath,
+  }
+}

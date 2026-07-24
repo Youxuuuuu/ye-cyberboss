@@ -238,6 +238,7 @@ function createMurmurLaneChatService({ config, adapter, cyberbossPort } = {}) {
         clientId: normalizedClientId,
         context,
         stateDir: config.stateDir,
+        isPathWithinRoot,
       }))
       .filter(Boolean)
       .map((message) => buildInboundDraft(message, { attachments: message.attachments }))
@@ -302,12 +303,23 @@ function createMurmurLaneChatService({ config, adapter, cyberbossPort } = {}) {
   }
 }
 
-function normalizeWebInboundMessage({ message, index, clientId, context, stateDir }) {
+function normalizeWebInboundMessage({
+  message,
+  index,
+  clientId,
+  context,
+  stateDir,
+  isPathWithinRoot,
+}) {
   if (!message || typeof message !== "object") {
     return null
   }
   const rawText = normalizeText(message.text)
-  const bubbleSegments = normalizeWebBubbleSegments(message.bubbleSegments, stateDir)
+  const bubbleSegments = normalizeWebBubbleSegments(
+    message.bubbleSegments,
+    stateDir,
+    isPathWithinRoot,
+  )
   const quoteText = normalizeWebQuote(message.quote)
   const text = bubbleSegments.length
     ? bubbleSegments.map((segment) => {
@@ -318,7 +330,7 @@ function normalizeWebInboundMessage({ message, index, clientId, context, stateDi
     }).filter(Boolean).join("\n\n")
     : (quoteText ? `[Quoted: ${quoteText}]\n${rawText}`.trim() : rawText)
   const attachments = (Array.isArray(message.attachments) ? message.attachments : [])
-    .map((item) => normalizeWebAttachment(item, stateDir))
+    .map((item) => normalizeWebAttachment(item, stateDir, isPathWithinRoot))
     .filter(Boolean)
   if (!text && !attachments.length) {
     return null
@@ -341,7 +353,7 @@ function normalizeWebInboundMessage({ message, index, clientId, context, stateDi
   }
 }
 
-function normalizeWebBubbleSegments(segments, stateDir) {
+function normalizeWebBubbleSegments(segments, stateDir, isPathWithinRoot) {
   return (Array.isArray(segments) ? segments : [])
     .filter((segment) => segment && typeof segment === "object")
     .map((segment) => ({
@@ -351,7 +363,7 @@ function normalizeWebBubbleSegments(segments, stateDir) {
       ...(Array.isArray(segment.attachments) && segment.attachments.length
         ? {
           attachments: segment.attachments
-            .map((item) => normalizeWebAttachment(item, stateDir))
+            .map((item) => normalizeWebAttachment(item, stateDir, isPathWithinRoot))
             .filter(Boolean),
         }
         : {}),
@@ -369,7 +381,7 @@ function normalizeWebQuote(value) {
   return normalizeText(value.text || value.title).slice(0, 4_000)
 }
 
-function normalizeWebAttachment(item, stateDir) {
+function normalizeWebAttachment(item, stateDir, isPathWithinRoot) {
   if (!item || typeof item !== "object") {
     return null
   }
