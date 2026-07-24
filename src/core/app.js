@@ -68,11 +68,9 @@ class CyberbossApp {
       config,
       cyberbossPort: this.createXiaoyeCyberbossPort(),
     });
-    this.webChatAdapter = this.xiaoye.murmurlane.adapter;
-    this.webChatServer = this.xiaoye.murmurlane.server;
     this.channelAdapter = createChannelRouter({
       weixin: this.weixinChannelAdapter,
-      web: this.webChatAdapter,
+      web: this.xiaoye.murmurlane.adapter,
     });
     this.timelineIntegration = createTimelineIntegration(config);
     const projectTooling = createProjectTooling(config, {
@@ -127,6 +125,11 @@ class CyberbossApp {
       getThreadStateStore: () => this.threadStateStore,
       resolveWorkspaceRoot: (...args) => this.resolveWorkspaceRoot(...args),
       routePreparedInbound: (...args) => this.routePreparedInbound(...args),
+      findModelByQuery,
+      isPathWithinRoot,
+      buildInboundDraft,
+      buildMergedInboundPrepared,
+      normalizeWorkspaceRoot,
       applyRuntimeEventToThreadState: (event) => this.threadStateStore.applyRuntimeEvent(event),
       getRuntimeId: () => this.runtimeAdapter.describe().id,
       resolveConversationWorkspaceRoot: (event) => this.resolveConversationWorkspaceRoot(event),
@@ -176,7 +179,7 @@ class CyberbossApp {
     console.log(`[cyberboss] syncBuffer=${syncBuffer ? "ready" : "empty"}`);
     console.log(`[cyberboss] runtimeEndpoint=${runtimeState.endpoint || runtimeState.command || "(spawn)"}`);
     console.log(`[cyberboss] runtimeModels=${runtimeState.models?.length || 0}`);
-    if (this.webChatServer && this.config.webChatEnabled !== false) {
+    if (this.config.webChatEnabled !== false) {
       console.log(`[cyberboss] webChat=http://${this.config.webChatHost}:${this.config.webChatPort}`);
     }
     if (this.config.startWithLocationServer) {
@@ -409,7 +412,7 @@ class CyberbossApp {
       senderId: normalized.senderId,
     });
     if (normalized.provider && normalized.provider !== "web" && normalized.provider !== "system") {
-      this.webChatAdapter.clearActiveTarget(normalized.senderId);
+      this.xiaoye.handleIncomingProvider(normalized);
     }
     this.streamDelivery.setReplyTarget(bindingKey, {
       userId: normalized.senderId,
@@ -468,21 +471,11 @@ class CyberbossApp {
   async dispatchPreparedTurn({ bindingKey, workspaceRoot, prepared }) {
     const pendingScopeKey = this.turnGateStore.begin(bindingKey, workspaceRoot);
     const currentThreadId = this.runtimeAdapter.getSessionStore().getThreadIdForWorkspace(bindingKey, workspaceRoot) || "";
-    if (prepared.provider === "web") {
-      this.xiaoye.recordInbound(prepared, {
-        runtimeId: this.runtimeAdapter.describe().id,
-        threadId: currentThreadId,
-        turnId: prepared.logicalTurnId || "",
-        workspaceRoot,
-      });
-    } else {
-      this.xiaoye.recordInbound(prepared, {
-        runtimeId: this.runtimeAdapter.describe().id,
-        threadId: currentThreadId,
-        turnId: "",
-        workspaceRoot,
-      });
-    }
+    this.xiaoye.recordPreparedInbound(prepared, {
+      runtimeId: this.runtimeAdapter.describe().id,
+      threadId: currentThreadId,
+      workspaceRoot,
+    });
     await this.channelAdapter.sendTyping({
       userId: prepared.senderId,
       status: 1,
@@ -521,28 +514,13 @@ class CyberbossApp {
         senderId: prepared.senderId,
       });
       this.turnGateStore.attachThread(pendingScopeKey, turn.threadId);
-      if (prepared.provider === "web") {
-        this.webChatAdapter.setActiveTarget({
-          userId: prepared.senderId,
-          contextToken: prepared.contextToken,
-          clientId: prepared.clientId,
-          threadId: turn.threadId,
-        });
-        this.webChatAdapter.publish({
-          kind: "thread.created",
-          senderId: prepared.senderId,
-          threadId: turn.threadId,
-          turnId: turn.turnId || "",
-          previousThreadId: currentThreadId,
-          clientId: prepared.clientId || "",
-        });
-        this.xiaoye.recordInbound(prepared, {
-          runtimeId: this.runtimeAdapter.describe().id,
-          threadId: turn.threadId,
-          turnId: turn.turnId || "",
-          workspaceRoot,
-        }, { publish: false });
-      }
+      this.xiaoye.handleRuntimeTurnStarted({
+        prepared,
+        turn,
+        previousThreadId: currentThreadId,
+        runtimeId: this.runtimeAdapter.describe().id,
+        workspaceRoot,
+      });
       const replyTarget = {
         userId: prepared.senderId,
         contextToken: prepared.contextToken,

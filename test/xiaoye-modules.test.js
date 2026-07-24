@@ -38,5 +38,10 @@ function createFakeCyberbossPort() {
     getThreadStateStore() { return {} },
     resolveWorkspaceRoot() { return "" },
     async routePreparedInbound() { return null },
+    findModelByQuery() { return null },
+    isPathWithinRoot() { return true },
+    buildInboundDraft(value) { return value },
+    buildMergedInboundPrepared(value) { return value },
+    normalizeWorkspaceRoot(value) { return value || "" },
   }
 }

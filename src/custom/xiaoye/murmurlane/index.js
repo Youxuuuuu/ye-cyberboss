@@ -28,6 +28,29 @@ function createMurmurLaneModule({ config, cyberbossPort } = {}) {
     publishRuntimeEvent(event) {
       return adapter.publishRuntimeEvent(event)
     },
+    handleIncomingProvider(normalized) {
+      adapter.clearActiveTarget(normalized?.senderId)
+    },
+    handleRuntimeTurnStarted({ prepared, turn, previousThreadId = "" } = {}) {
+      if (prepared?.provider !== "web") {
+        return false
+      }
+      adapter.setActiveTarget({
+        userId: prepared.senderId,
+        contextToken: prepared.contextToken,
+        clientId: prepared.clientId,
+        threadId: turn.threadId,
+      })
+      adapter.publish({
+        kind: "thread.created",
+        senderId: prepared.senderId,
+        threadId: turn.threadId,
+        turnId: turn.turnId || "",
+        previousThreadId,
+        clientId: prepared.clientId || "",
+      })
+      return true
+    },
   }
 }
 

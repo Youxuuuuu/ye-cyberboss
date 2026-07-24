@@ -49,6 +49,11 @@ test("chat status returns the cursor from the web adapter source for the selecte
       },
       resolveWorkspaceRoot() { return "D:\\study\\cyberboss"; },
       async routePreparedInbound() { return null; },
+      findModelByQuery() { return null; },
+      isPathWithinRoot() { return true; },
+      buildInboundDraft(value) { return value; },
+      buildMergedInboundPrepared(value) { return value; },
+      normalizeWorkspaceRoot(value) { return value; },
     },
   });
   const status = service.getWebChatStatus({

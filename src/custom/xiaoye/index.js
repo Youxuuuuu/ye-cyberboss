@@ -18,6 +18,9 @@ function createXiaoyeModules({ config, cyberbossPort } = {}) {
       conversation?.close?.()
       return murmurlane.close()
     },
+    handleIncomingProvider(normalized) {
+      return murmurlane.handleIncomingProvider(normalized)
+    },
     handleRuntimeEvent(event, rawEvent) {
       if (event) {
         murmurlane.publishRuntimeEvent(event)
@@ -56,6 +59,34 @@ function createXiaoyeModules({ config, cyberbossPort } = {}) {
         return null
       }
     },
+    recordPreparedInbound(prepared, context = {}) {
+      return this.recordInbound(prepared, {
+        ...context,
+        turnId: prepared?.provider === "web" ? prepared.logicalTurnId || "" : "",
+      })
+    },
+    handleRuntimeTurnStarted({
+      prepared,
+      turn,
+      previousThreadId = "",
+      runtimeId = "",
+      workspaceRoot = "",
+    } = {}) {
+      const handled = murmurlane.handleRuntimeTurnStarted({
+        prepared,
+        turn,
+        previousThreadId,
+      })
+      if (!handled) {
+        return null
+      }
+      return this.recordInbound(prepared, {
+        runtimeId,
+        threadId: turn.threadId,
+        turnId: turn.turnId || "",
+        workspaceRoot,
+      }, { publish: false })
+    },
   }
 }
 
@@ -67,6 +98,11 @@ function createMurmurLanePort(cyberbossPort) {
     getThreadStateStore: (...args) => cyberbossPort.getThreadStateStore(...args),
     resolveWorkspaceRoot: (...args) => cyberbossPort.resolveWorkspaceRoot(...args),
     routePreparedInbound: (...args) => cyberbossPort.routePreparedInbound(...args),
+    findModelByQuery: (...args) => cyberbossPort.findModelByQuery(...args),
+    isPathWithinRoot: (...args) => cyberbossPort.isPathWithinRoot(...args),
+    buildInboundDraft: (...args) => cyberbossPort.buildInboundDraft(...args),
+    buildMergedInboundPrepared: (...args) => cyberbossPort.buildMergedInboundPrepared(...args),
+    normalizeWorkspaceRoot: (...args) => cyberbossPort.normalizeWorkspaceRoot(...args),
   }
 }
 

@@ -57,6 +57,11 @@ test("murmurlane chat service resolves identity and status through the narrow cy
       async routePreparedInbound() {
         return { accepted: true }
       },
+      findModelByQuery() { return null },
+      isPathWithinRoot() { return true },
+      buildInboundDraft(value) { return value },
+      buildMergedInboundPrepared(value) { return value },
+      normalizeWorkspaceRoot(value) { return String(value || "").replace(/\\/g, "/") },
     },
   })
 

@@ -1,19 +1,17 @@
 const crypto = require("crypto")
 const path = require("path")
 
-const { findModelByQuery } = require("../../../adapters/runtime/codex/model-catalog")
-const { isPathWithinRoot } = require("../../../adapters/runtime/shared/approval-command")
-const {
-  buildInboundDraft,
-  buildMergedInboundPrepared,
-} = require("../../../core/inbound-turn")
-const { normalizeWorkspaceRoot } = require("../../../core/workspace-root")
 const { normalizeWebChatSendContract } = require("./webchat/contract")
 
 function createMurmurLaneChatService({ config, adapter, cyberbossPort } = {}) {
   if (!cyberbossPort || typeof cyberbossPort !== "object") {
     throw new Error("murmurlane chat service requires cyberbossPort")
   }
+  const findModelByQuery = requirePortFunction(cyberbossPort, "findModelByQuery")
+  const isPathWithinRoot = requirePortFunction(cyberbossPort, "isPathWithinRoot")
+  const buildInboundDraft = requirePortFunction(cyberbossPort, "buildInboundDraft")
+  const buildMergedInboundPrepared = requirePortFunction(cyberbossPort, "buildMergedInboundPrepared")
+  const normalizeWorkspaceRoot = requirePortFunction(cyberbossPort, "normalizeWorkspaceRoot")
 
   function getRuntimeAdapter() {
     return requirePortObject(cyberbossPort, "getRuntimeAdapter")
@@ -419,6 +417,14 @@ function requirePortObject(port, methodName) {
     throw new Error(`cyberbossPort.${methodName} must return an object`)
   }
   return value
+}
+
+function requirePortFunction(port, methodName) {
+  const method = port[methodName]
+  if (typeof method !== "function") {
+    throw new Error(`cyberbossPort.${methodName} is required`)
+  }
+  return method.bind(port)
 }
 
 function normalizeCommandArgument(value) {
