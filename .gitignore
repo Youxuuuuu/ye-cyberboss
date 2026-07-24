@@ -10,4 +10,7 @@ firmware/
 tmp-*
 examples/mcp/
 docs/*
+!docs/agents/
+!docs/agents/**
+!docs/xiaoye-refactor-baseline.md
 templates/*
