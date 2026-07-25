@@ -1,5 +1,6 @@
 const { normalizeConversationRecord } = require("./normalize-record")
 const { normalizeTimestamp, stripBracketTimestampPrefix } = require("./normalize-time")
+const { parseQuotedEnvelope } = require("../shared/quoted-envelope")
 
 const SYSTEM_COMPACT_DISPLAY_TEXT = "宝宝大王系统巡游"
 
@@ -121,18 +122,7 @@ function normalizeMeta(meta) {
 }
 
 function extractConversationQuote(text) {
-  const normalized = String(text || "").trim()
-  const match = normalized.match(/^\[Quoted:\s*([\s\S]*?)\]\s*(?:\r?\n+)?([\s\S]*)$/u)
-  if (!match) {
-    return {
-      text: normalized,
-      quote: undefined,
-    }
-  }
-  return {
-    text: normalizeText(match[2]),
-    quote: normalizeText(match[1]) || undefined,
-  }
+  return parseQuotedEnvelope(text)
 }
 
 function isApprovalReply(text) {

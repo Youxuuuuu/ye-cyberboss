@@ -114,6 +114,36 @@ test("webchat messages preserve canonical user and assistant identities", async 
   assert.equal(assistant.record.meta.canonicalTurnId, "prompt-canonical-identity");
 });
 
+test("webchat inbound parses a nested quoted envelope", () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-webchat-quote-"));
+  const adapter = createWebChatChannelAdapter({
+    config: {
+      stateDir,
+      webChatSenderId: "user-quote",
+      allowedUserIds: ["user-quote"],
+      webChatEnabled: true,
+    },
+  });
+
+  try {
+    const inbound = adapter.publishInbound({
+      prepared: {
+        senderId: "user-quote",
+        messageId: "message-quote-1",
+        text: "[Quoted: [表情包]]\n萌~",
+        receivedAt: "2026-07-25T09:05:00.000Z",
+      },
+      threadId: "thread-quote",
+      turnId: "turn-quote",
+    });
+
+    assert.equal(inbound.record.text, "萌~");
+    assert.equal(inbound.record.meta.quote, "[表情包]");
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("runtime correlation events expose protocol-v2 turn identities", () => {
   const adapter = createWebChatChannelAdapter({
     config: {

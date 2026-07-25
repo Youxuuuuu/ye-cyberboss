@@ -299,6 +299,63 @@ test("codex realtime and import keep an ordinary exec operation", (t) => {
   }
 })
 
+test("claudecode realtime and import preserve a nested quoted envelope", (t) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-claude-quote-"))
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }))
+  const sourceFile = path.join(rootDir, "claude-quote.jsonl")
+  const rawRecords = [
+    claudeUser({
+      sessionId: "thread-claude-quote",
+      promptId: "turn-claude-quote",
+      uuid: "user-claude-quote",
+      text: "[Quoted: [cloud_music_play] 287248]\n好听哦",
+      timestamp: "2026-07-25T09:00:00.000Z",
+    }),
+  ]
+  writeJsonl(sourceFile, rawRecords)
+
+  const { realtime, imported } = runBothModes({
+    rootDir,
+    runtimeId: "claudecode",
+    sourceFile,
+    rawRecords,
+    date: "2026-07-25",
+  })
+
+  for (const records of [realtime, imported]) {
+    assert.equal(records.length, 1)
+    assert.equal(records[0].text, "好听哦")
+    assert.equal(records[0].meta.quote, "[cloud_music_play] 287248")
+  }
+})
+
+test("merged web inbound preserves a nested quoted envelope", (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-web-quote-"))
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
+  const archive = createArchive(stateDir)
+  t.after(() => archive.close())
+
+  archive.recordMergedWebInbound({
+    provider: "web",
+    senderId: "user-web-quote",
+    requestId: "request-web-quote",
+    messageId: "message-web-quote",
+    logicalTurnId: "web:request-web-quote",
+    originalText: "[Quoted: [表情包]]\n萌~",
+    receivedAt: "2026-07-25T09:05:00.000Z",
+    attachments: [],
+  }, {
+    runtimeId: "codex",
+    threadId: "thread-web-quote",
+    turnId: "turn-web-quote",
+    workspaceRoot: WORKSPACE_ROOT,
+  })
+
+  const [record] = readDay(stateDir, "2026-07-25")
+  assert.equal(record.text, "萌~")
+  assert.equal(record.meta.quote, "[表情包]")
+})
+
 function createArchive(stateDir) {
   return new ConversationArchive({
     config: {
@@ -436,6 +493,21 @@ function codexMcpToolCallEnd({ callId, server, tool, args, result, timestamp }) 
         arguments: args,
       },
       result,
+    },
+  }
+}
+
+function claudeUser({ sessionId, promptId, uuid, text, timestamp }) {
+  return {
+    type: "user",
+    sessionId,
+    promptId,
+    uuid,
+    cwd: WORKSPACE_ROOT,
+    timestamp,
+    message: {
+      role: "user",
+      content: text,
     },
   }
 }

@@ -8,6 +8,7 @@ const { RealtimeTailer } = require("./realtime-tailer")
 const { ConversationSourceLineResolver } = require("./source-line-resolver")
 const { createClaudeCodeImportParser } = require("./providers/claudecode-import")
 const { createCodexImportParser } = require("./providers/codex-import")
+const { parseQuotedEnvelope } = require("../shared/quoted-envelope")
 
 class ConversationArchive {
   constructor({ config, writer = null, logger = console } = {}) {
@@ -901,18 +902,7 @@ function formatErrorMessage(error) {
 }
 
 function extractQuote(text) {
-  const normalized = String(text || "")
-  const match = normalized.match(/^\[Quoted:\s*([^\]]+)\]\s*\r?\n([\s\S]*)$/u)
-  if (!match) {
-    return {
-      text: normalized.trim(),
-      quote: undefined,
-    }
-  }
-  return {
-    text: String(match[2] || "").trim(),
-    quote: match[1].trim(),
-  }
+  return parseQuotedEnvelope(text)
 }
 
 function buildInboundRawId(prepared = {}) {

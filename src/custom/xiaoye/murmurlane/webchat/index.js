@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const fs = require("fs/promises");
 const path = require("path");
+const { parseQuotedEnvelope } = require("../../shared/quoted-envelope");
 
 const MAX_EVENT_LOG_SIZE = 2_000;
 const MAX_UPLOAD_FILE_NAME_LENGTH = 120;
@@ -162,10 +163,9 @@ function createWebChatChannelAdapter({ config }) {
     const bubbleSegments = normalizeBubbleSegments(prepared.bubbleSegments);
     const text = bubbleSegments.map((segment) => segment.text).filter(Boolean).join("\n\n")
       || normalizeText(prepared.originalText || prepared.text);
-    const quote = extractQuoteText(text);
-    const visibleText = quote
-      ? text.replace(/^\[Quoted:\s*[^\]]+\]\s*\r?\n/i, "").trim()
-      : text;
+    const quotedEnvelope = parseQuotedEnvelope(text);
+    const quote = quotedEnvelope.quote || "";
+    const visibleText = quotedEnvelope.text;
     const turnIdentity = normalizeTurnIdentity({
       requestId: prepared.requestId,
       messageId: prepared.messageId,
@@ -312,10 +312,9 @@ function createWebChatChannelAdapter({ config }) {
   } = {}) {
     const normalizedText = String(text || "").trim();
     if (!normalizedText) return Promise.resolve();
-    const quote = extractQuoteText(normalizedText);
-    const visibleText = quote
-      ? normalizedText.replace(/^\[Quoted:\s*[^\]]+\]\s*\r?\n/i, "").trim()
-      : normalizedText;
+    const quotedEnvelope = parseQuotedEnvelope(normalizedText);
+    const quote = quotedEnvelope.quote || "";
+    const visibleText = quotedEnvelope.text;
     const stableItemId = normalizeText(itemId) || normalizeText(messageId) || crypto.randomUUID();
     const turnIdentity = normalizeTurnIdentity({
       requestId,
@@ -531,11 +530,6 @@ function normalizeTurnIdentity(identity = {}) {
 
 function normalizeString(value) {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function extractQuoteText(text) {
-  const match = String(text || "").match(/^\[Quoted:\s*([^\]]+)\]\s*\r?\n/i);
-  return match?.[1]?.trim() || "";
 }
 
 function normalizeContentType(value) {
