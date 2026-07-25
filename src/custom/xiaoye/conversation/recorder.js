@@ -703,9 +703,6 @@ class ConversationArchive {
     if (this.hasCanonicalWebUserForTurn(record)) {
       return true
     }
-    if (!normalizeText(record.text) && hasMedia(record.meta) && this.hasRecentCanonicalRealtimeUser(record)) {
-      return true
-    }
     return false
   }
 
@@ -846,28 +843,6 @@ class ConversationArchive {
     }
     const [entry] = this.pendingInboundUserRecords.splice(index, 1)
     return entry
-  }
-
-  hasRecentCanonicalRealtimeUser(record) {
-    const text = normalizeText(record.text)
-    if (text) {
-      return false
-    }
-    const comparisonTime = Date.parse(record.timestamp || "")
-    if (!Number.isFinite(comparisonTime)) {
-      return false
-    }
-    const existing = this.writer.readExistingDayRecords(
-      this.writer.resolveDayFilePath(record.date),
-      []
-    )
-    return existing.some((candidate) => (
-      candidate.type === "user"
-      && candidate.runtimeId === record.runtimeId
-      && candidate.threadId === record.threadId
-      && normalizeText(candidate.text)
-      && Math.abs(Date.parse(candidate.timestamp) - comparisonTime) < 60_000
-    ))
   }
 
   hasCanonicalWebUserForTurn(record) {
