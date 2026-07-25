@@ -132,6 +132,173 @@ test("codex emits the agent message fallback when a turn has no assistant respon
   }
 })
 
+test("codex realtime and import expose the inner MCP tool instead of its exec wrapper", (t) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-codex-mcp-"))
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }))
+  const sourceFile = path.join(rootDir, "codex-mcp.jsonl")
+  const rawRecords = [
+    codexSession("thread-mcp"),
+    codexTurn("turn-mcp", "2026-07-25T08:40:00.010Z"),
+    codexCustomToolCall({
+      callId: "call-wrapper",
+      input: "const result = await tools.mcp__cloud_music__cloud_music_play({id: \"123\"})",
+      timestamp: "2026-07-25T08:40:01.000Z",
+    }),
+    codexMcpToolCallEnd({
+      callId: "mcp-call-1",
+      server: "cloud_music",
+      tool: "cloud_music_play",
+      args: { id: "123", type: "song" },
+      result: { ok: true },
+      timestamp: "2026-07-25T08:40:01.010Z",
+    }),
+    codexCustomToolCallOutput("call-wrapper", "completed", "2026-07-25T08:40:01.020Z"),
+    codexTaskComplete("2026-07-25T08:40:01.030Z"),
+  ]
+  writeJsonl(sourceFile, rawRecords)
+
+  const { realtime, imported } = runBothModes({
+    rootDir,
+    runtimeId: "codex",
+    sourceFile,
+    rawRecords,
+    date: "2026-07-25",
+  })
+
+  for (const records of [realtime, imported]) {
+    const operations = records.filter((record) => record.type === "operation")
+    assert.deepEqual(operations.map((record) => record.meta.toolName), ["cloud_music_play"])
+  }
+})
+
+test("codex realtime and import preserve each MCP operation and its visible assistant media", (t) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-codex-mcp-media-"))
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }))
+  const sourceFile = path.join(rootDir, "codex-mcp-media.jsonl")
+  const imagePath = `${WORKSPACE_ROOT}/tmp/fixture.png`
+  const filePath = `${WORKSPACE_ROOT}/tmp/fixture.txt`
+  const stickerPath = `${WORKSPACE_ROOT}/stickers/fixture.gif`
+  const rawRecords = [
+    codexSession("thread-mcp-media"),
+    codexTurn("turn-mcp-media", "2026-07-25T08:50:00.010Z"),
+    codexCustomToolCall({
+      callId: "call-media-wrapper",
+      input: [
+        "await tools.mcp__cyberboss_tools__cyberboss_channel_send_file({filePath: imagePath})",
+        "await tools.mcp__cyberboss_tools__cyberboss_channel_send_file({filePath})",
+        "await tools.mcp__cyberboss_tools__cyberboss_sticker_send({stickerId})",
+      ].join("\n"),
+      timestamp: "2026-07-25T08:50:01.000Z",
+    }),
+    codexMcpToolCallEnd({
+      callId: "mcp-image",
+      server: "cyberboss_tools",
+      tool: "cyberboss_channel_send_file",
+      args: { filePath: imagePath },
+      result: { path: imagePath },
+      timestamp: "2026-07-25T08:50:01.010Z",
+    }),
+    codexMcpToolCallEnd({
+      callId: "mcp-file",
+      server: "cyberboss_tools",
+      tool: "cyberboss_channel_send_file",
+      args: { filePath },
+      result: { path: filePath },
+      timestamp: "2026-07-25T08:50:01.020Z",
+    }),
+    codexMcpToolCallEnd({
+      callId: "mcp-sticker",
+      server: "cyberboss_tools",
+      tool: "cyberboss_sticker_send",
+      args: { stickerId: "sticker-fixture" },
+      result: { path: stickerPath, stickerId: "sticker-fixture" },
+      timestamp: "2026-07-25T08:50:01.030Z",
+    }),
+    codexCustomToolCallOutput("call-media-wrapper", "completed", "2026-07-25T08:50:01.040Z"),
+    codexTaskComplete("2026-07-25T08:50:01.050Z"),
+  ]
+  writeJsonl(sourceFile, rawRecords)
+
+  const { realtime, imported } = runBothModes({
+    rootDir,
+    runtimeId: "codex",
+    sourceFile,
+    rawRecords,
+    date: "2026-07-25",
+  })
+
+  for (const records of [realtime, imported]) {
+    assert.deepEqual(
+      records.filter((record) => record.type === "operation").map((record) => record.meta.toolName),
+      [
+        "cyberboss_channel_send_file",
+        "cyberboss_channel_send_file",
+        "cyberboss_sticker_send",
+      ],
+    )
+    const visible = records.filter((record) => record.type === "assistant")
+    assert.equal(visible.length, 3)
+    assert.deepEqual(pickMedia(visible[0].meta.attachments[0]), {
+      fileName: "fixture.png",
+      kind: "image",
+      isImage: true,
+      path: imagePath,
+      relativePath: "tmp/fixture.png",
+      stickerId: "",
+    })
+    assert.deepEqual(pickMedia(visible[1].meta.files[0]), {
+      fileName: "fixture.txt",
+      kind: "file",
+      isImage: false,
+      path: filePath,
+      relativePath: "tmp/fixture.txt",
+      stickerId: "",
+    })
+    assert.deepEqual(pickMedia(visible[2].meta.stickers[0]), {
+      fileName: "fixture.gif",
+      kind: "sticker",
+      isImage: true,
+      path: stickerPath,
+      relativePath: "stickers/fixture.gif",
+      stickerId: "sticker-fixture",
+    })
+    assert.equal(visible[2].meta.attachments.length, 1)
+  }
+})
+
+test("codex realtime and import keep an ordinary exec operation", (t) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-codex-exec-"))
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }))
+  const sourceFile = path.join(rootDir, "codex-exec.jsonl")
+  const rawRecords = [
+    codexSession("thread-exec"),
+    codexTurn("turn-exec", "2026-07-25T08:55:00.010Z"),
+    codexCustomToolCall({
+      callId: "call-exec",
+      input: "Get-ChildItem -Path .",
+      timestamp: "2026-07-25T08:55:01.000Z",
+    }),
+    codexCustomToolCallOutput("call-exec", "completed", "2026-07-25T08:55:01.010Z"),
+    codexTaskComplete("2026-07-25T08:55:01.020Z"),
+  ]
+  writeJsonl(sourceFile, rawRecords)
+
+  const { realtime, imported } = runBothModes({
+    rootDir,
+    runtimeId: "codex",
+    sourceFile,
+    rawRecords,
+    date: "2026-07-25",
+  })
+
+  for (const records of [realtime, imported]) {
+    assert.deepEqual(
+      records.filter((record) => record.type === "operation").map((record) => record.meta.toolName),
+      ["exec"],
+    )
+  }
+})
+
 function createArchive(stateDir) {
   return new ConversationArchive({
     config: {
@@ -231,6 +398,48 @@ function codexTaskComplete(timestamp) {
   }
 }
 
+function codexCustomToolCall({ callId, input, timestamp }) {
+  return {
+    timestamp,
+    type: "response_item",
+    payload: {
+      type: "custom_tool_call",
+      name: "exec",
+      call_id: callId,
+      input,
+    },
+  }
+}
+
+function codexCustomToolCallOutput(callId, output, timestamp) {
+  return {
+    timestamp,
+    type: "response_item",
+    payload: {
+      type: "custom_tool_call_output",
+      call_id: callId,
+      output,
+    },
+  }
+}
+
+function codexMcpToolCallEnd({ callId, server, tool, args, result, timestamp }) {
+  return {
+    timestamp,
+    type: "event_msg",
+    payload: {
+      type: "mcp_tool_call_end",
+      call_id: callId,
+      invocation: {
+        server,
+        tool,
+        arguments: args,
+      },
+      result,
+    },
+  }
+}
+
 function writeJsonl(filePath, records) {
   fs.writeFileSync(filePath, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`, "utf8")
 }
@@ -244,4 +453,15 @@ function readDay(stateDir, date) {
 
 function toSlash(value) {
   return String(value || "").replace(/\\/g, "/")
+}
+
+function pickMedia(item = {}) {
+  return {
+    fileName: item.fileName || "",
+    kind: item.kind || "",
+    isImage: Boolean(item.isImage),
+    path: item.path || "",
+    relativePath: item.relativePath || "",
+    stickerId: item.stickerId || "",
+  }
 }

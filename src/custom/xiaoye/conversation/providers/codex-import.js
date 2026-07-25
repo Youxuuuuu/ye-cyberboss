@@ -90,6 +90,9 @@ class CodexImportParser {
       })
       return operationRecord ? [operationRecord] : []
     }
+    if (payloadType === "mcp_tool_call_end") {
+      return this.parseMcpToolCallEnd({ raw, sourceFile, sourceLine, fallbackTimestamp })
+    }
     if (payloadType === "user_message" || payloadType === "agent_message") {
       const role = payloadType === "user_message" ? "user" : "assistant"
       const text = normalizeText(raw?.payload?.message)
@@ -216,6 +219,9 @@ class CodexImportParser {
     }
 
     if (payloadType === "function_call" || payloadType === "custom_tool_call" || payloadType === "patch_apply_end") {
+      if (payloadType === "custom_tool_call" && isMcpExecWrapper(payload)) {
+        return []
+      }
       const operationRecord = this.buildOperationRecord({
         timestamp,
         payload,
@@ -286,6 +292,71 @@ class CodexImportParser {
     }
 
     return []
+  }
+
+  parseMcpToolCallEnd({ raw, sourceFile, sourceLine, fallbackTimestamp = "" }) {
+    const payload = raw?.payload && typeof raw.payload === "object" ? raw.payload : {}
+    const invocation = payload.invocation && typeof payload.invocation === "object"
+      ? payload.invocation
+      : {}
+    const toolName = normalizeText(invocation.tool)
+    if (!toolName) {
+      return []
+    }
+    const args = invocation.arguments && typeof invocation.arguments === "object"
+      ? invocation.arguments
+      : parseStructuredValue(invocation.arguments)
+    const outputText = stringifyStructuredValue(payload.result)
+    const timestamp = normalizeTimestamp(raw.timestamp, fallbackTimestamp)
+    const callId = normalizeText(payload.call_id)
+    const operationRecord = this.buildOperationRecord({
+      timestamp,
+      payload: {
+        type: "mcp_tool_call_end",
+        name: toolName,
+        call_id: callId,
+        arguments: args,
+      },
+      sourceFile,
+      sourceLine,
+    })
+    if (!operationRecord) {
+      return []
+    }
+
+    const records = [normalizeConversationRecord({
+      ...operationRecord,
+      meta: {
+        ...operationRecord.meta,
+        ...buildToolResultMeta(outputText),
+      },
+    })]
+    const visibleAssistant = buildVisibleAssistantRecordFromToolCall({
+      toolName,
+      args,
+      outputText,
+      workspaceRoot: this.currentWorkspaceRoot,
+      stateDir: this.stateDir,
+    })
+    if (visibleAssistant) {
+      records.push(normalizeConversationRecord({
+        ...visibleAssistant,
+        timestamp,
+        runtimeId: "codex",
+        threadId: this.currentThreadId,
+        turnId: this.currentTurnId,
+        workspaceRoot: this.currentWorkspaceRoot,
+        source: {
+          provider: "codex",
+          sourceType: "codex.visible",
+          sourceFile,
+          sourceLine,
+          rawId: `visible:${sourceLine}`,
+          callId,
+        },
+      }))
+    }
+    return records
   }
 
   buildOperationRecord({ timestamp, payload, sourceFile, sourceLine }) {
@@ -528,6 +599,25 @@ function mergeMedia(left = [], right = []) {
 
 function normalizeText(value) {
   return typeof value === "string" ? value.trim() : ""
+}
+
+function isMcpExecWrapper(payload = {}) {
+  return normalizeText(payload.name) === "exec"
+    && normalizeText(payload.input).includes("tools.mcp__")
+}
+
+function stringifyStructuredValue(value) {
+  if (typeof value === "string") {
+    return value
+  }
+  if (value == null) {
+    return ""
+  }
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
 }
 
 module.exports = {
