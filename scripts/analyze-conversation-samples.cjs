@@ -11,7 +11,7 @@ const {
 const files = process.argv.slice(2)
 
 if (files[0] === "--parser-parity") {
-  compareParserModes(files[1], files[2])
+  compareParserModes(files[1], files[2], files[3])
   return
 }
 
@@ -125,7 +125,7 @@ function compareVisible(leftPath, rightPath) {
   }
 }
 
-function compareParserModes(runtimeId, sourceFile) {
+function compareParserModes(runtimeId, sourceFile, mediaStateDir = "") {
   if (!["codex", "claudecode"].includes(runtimeId) || !sourceFile) {
     throw new Error("usage: --parser-parity <codex|claudecode> <source-file>")
   }
@@ -135,7 +135,7 @@ function compareParserModes(runtimeId, sourceFile) {
 
   try {
     const rawRecords = parseValues(fs.readFileSync(sourceFile, "utf8")).flatMap(flattenTopLevel)
-    const realtimeArchive = createArchive(realtimeDir)
+    const realtimeArchive = createArchive(realtimeDir, mediaStateDir || realtimeDir)
     rawRecords.forEach((raw, index) => {
       realtimeArchive.ingestRealtimeSessionLine({
         runtimeId,
@@ -149,7 +149,7 @@ function compareParserModes(runtimeId, sourceFile) {
 
     const importer = new ConversationImporter({
       config: {
-        stateDir: importDir,
+        stateDir: mediaStateDir || importDir,
         conversationDir: path.join(importDir, "conversations"),
       },
       logger: { warn() {} },
@@ -163,6 +163,7 @@ function compareParserModes(runtimeId, sourceFile) {
     const realtimeRecords = readConversationDirectory(realtimeDir)
     const importedRecords = readConversationDirectory(importDir)
     const differences = compareVisibleRecords(realtimeRecords, importedRecords)
+    const orderedDifferences = compareOrderedVisibleRecords(realtimeRecords, importedRecords)
     process.stdout.write(`${JSON.stringify({
       runtimeId,
       source: path.basename(sourceFile),
@@ -171,8 +172,10 @@ function compareParserModes(runtimeId, sourceFile) {
       imported: summarizeVisibleRecords(importedRecords),
       visibleDifferences: differences.length,
       differences: differences.slice(0, 50),
+      orderedVisibleDifferences: orderedDifferences.length,
+      orderedDifferences: orderedDifferences.slice(0, 50),
     }, null, 2)}\n`)
-    if (differences.length) {
+    if (differences.length || orderedDifferences.length) {
       process.exitCode = 1
     }
   } finally {
@@ -180,10 +183,10 @@ function compareParserModes(runtimeId, sourceFile) {
   }
 }
 
-function createArchive(stateDir) {
+function createArchive(stateDir, mediaStateDir = stateDir) {
   return new ConversationArchive({
     config: {
-      stateDir,
+      stateDir: mediaStateDir,
       conversationDir: path.join(stateDir, "conversations"),
     },
   })
@@ -219,6 +222,26 @@ function compareVisibleRecords(leftRecords, rightRecords) {
   return differences
 }
 
+function compareOrderedVisibleRecords(leftRecords, rightRecords) {
+  const left = leftRecords.map(visibleSemantics)
+  const right = rightRecords.map(visibleSemantics)
+  const length = Math.max(left.length, right.length)
+  const differences = []
+  for (let index = 0; index < length; index += 1) {
+    const leftValue = left[index]
+    const rightValue = right[index]
+    if (stableJson(leftValue) === stableJson(rightValue)) {
+      continue
+    }
+    differences.push({
+      index,
+      realtime: leftValue ? visibleLabel(leftValue) : "missing",
+      imported: rightValue ? visibleLabel(rightValue) : "missing",
+    })
+  }
+  return differences
+}
+
 function summarizeVisibleRecords(records) {
   const types = new Map()
   const toolNames = new Map()
@@ -229,6 +252,9 @@ function summarizeVisibleRecords(records) {
     stickers: 0,
   }
   let assistantMediaRecords = 0
+  let malformedMediaPaths = 0
+  let canonicalStickerRelativePaths = 0
+  let stickerBasenameOnlyRelativePaths = 0
   for (const record of records) {
     increment(types, record?.type || "unknown")
     const meta = record?.meta && typeof record.meta === "object" ? record.meta : {}
@@ -240,6 +266,17 @@ function summarizeVisibleRecords(records) {
     }
     for (const item of [...media.attachments, ...media.files, ...media.stickers]) {
       increment(mediaKinds, item?.kind || "unknown")
+      if (/(?:^|[^:])\/{2,}/u.test(String(item?.path || ""))) {
+        malformedMediaPaths += 1
+      }
+    }
+    for (const item of media.stickers) {
+      const relativePath = String(item?.relativePath || "").replace(/\\/g, "/")
+      if (relativePath.startsWith("stickers/assets/")) {
+        canonicalStickerRelativePaths += 1
+      } else if (relativePath && !relativePath.includes("/")) {
+        stickerBasenameOnlyRelativePaths += 1
+      }
     }
     if (record?.type === "assistant" && Object.values(media).some((items) => items.length)) {
       assistantMediaRecords += 1
@@ -255,6 +292,11 @@ function summarizeVisibleRecords(records) {
     mediaKinds: sortedObject(mediaKinds),
     assistantMediaRecords,
     assistantMediaCollections,
+    mediaHealth: {
+      malformedMediaPaths,
+      canonicalStickerRelativePaths,
+      stickerBasenameOnlyRelativePaths,
+    },
   }
 }
 
@@ -298,6 +340,14 @@ function visibleSemantics(record) {
     visibleAs: record?.visibleAs || meta.visibleAs || "",
     displayText: record?.displayText || meta.displayText || "",
   }
+}
+
+function visibleLabel(semantics = {}) {
+  return [
+    semantics.runtimeId || "runtime?",
+    semantics.type || "type?",
+    semantics.toolName || semantics.visibleAs || semantics.operationKind || "record",
+  ].join(":")
 }
 
 function normalizeVisibleMedia(value) {

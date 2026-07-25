@@ -48,11 +48,19 @@ for (const runtimeId of Object.keys(RUNTIME_FIXTURES)) {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), `cyberboss-${runtimeId}-matrix-`))
     t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }))
 
-    const { realtime, imported } = runFixtureModes({
+    const { realtime, realtimeBeforeReplay, imported } = runFixtureModes({
       rootDir,
       runtimeId,
       fixtureFiles: RUNTIME_FIXTURES[runtimeId],
     })
+    assert.deepEqual(
+      imported.map(pickVisibleSemantics),
+      realtime.map(pickVisibleSemantics),
+    )
+    assert.deepEqual(
+      realtime.map(pickVisibleSemantics),
+      realtimeBeforeReplay.map(pickVisibleSemantics),
+    )
     const realtimeVisible = realtime.map(pickVisibleSemantics).sort(compareStable)
     const importedVisible = imported.map(pickVisibleSemantics).sort(compareStable)
 
@@ -83,6 +91,16 @@ function runFixtureModes({ rootDir, runtimeId, fixtureFiles }) {
       workspaceRoot: WORKSPACE_ROOT,
     })
   })
+  const realtimeBeforeReplay = readConversationDays(realtimeDir)
+  rawRecords.forEach((raw, index) => {
+    realtimeArchive.ingestRealtimeSessionLine({
+      runtimeId,
+      raw,
+      sourceFile,
+      sourceLine: index + 1,
+      workspaceRoot: WORKSPACE_ROOT,
+    })
+  })
   realtimeArchive.close()
 
   const importArchive = createArchive(importDir)
@@ -99,6 +117,7 @@ function runFixtureModes({ rootDir, runtimeId, fixtureFiles }) {
 
   return {
     realtime: readConversationDays(realtimeDir),
+    realtimeBeforeReplay,
     imported: readConversationDays(importDir),
   }
 }
@@ -167,7 +186,9 @@ function assertMatrixCoverage(runtimeId, records) {
   assert.ok(assistants.filter((record) => record.text.includes("脱敏回复")).length >= 2)
 
   if (runtimeId === "codex") {
-    assert.ok(toolNames.includes("exec"))
+    assert.ok(toolNames.includes("shell_command"))
+    assert.equal(toolNames.includes("exec"), false)
+    assert.ok(records.every((record) => !record.text.includes("[exec]")))
     assert.ok(records.every((record) => !record.text.includes("<recommended_plugins>")))
     assert.deepEqual(
       assistants
