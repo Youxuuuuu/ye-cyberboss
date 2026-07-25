@@ -188,6 +188,8 @@ function createArchive(stateDir, mediaStateDir = stateDir) {
     config: {
       stateDir: mediaStateDir,
       conversationDir: path.join(stateDir, "conversations"),
+      conversationRealtimeCheckpointFile: path.join(stateDir, "conversation-realtime-checkpoints.json"),
+      pendingInboundQuarantineFile: path.join(stateDir, "_unmatched-inbound.jsonl"),
     },
   })
 }
