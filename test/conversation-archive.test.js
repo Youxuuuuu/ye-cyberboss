@@ -901,6 +901,144 @@ test("conversation writer reports actual changes, rejects empty directories, and
   assert.equal(archive.realtimePollTimer, null)
 })
 
+test("conversation writer orders equal timestamps by source file, line, order, then insertion", (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-order-"))
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
+  const writer = new ConversationWriter({
+    conversationDir: path.join(stateDir, "conversations"),
+  })
+  const timestamp = "2026-07-25T12:00:00.000Z"
+
+  writer.writeRecords([
+    orderedRecord({
+      id: "record-z-source",
+      sourceKey: "fixture|z-source",
+      sourceFile: "z-source.jsonl",
+      sourceLine: 1,
+      sourceOrder: 1,
+    }),
+    orderedRecord({
+      id: "record-a-source",
+      sourceKey: "fixture|a-source",
+      sourceFile: "a-source.jsonl",
+      sourceLine: 2,
+      sourceOrder: 1,
+    }),
+    orderedRecord({
+      id: "record-z-insertion",
+      sourceKey: "fixture|z-insertion",
+      sourceFile: "same-source.jsonl",
+      sourceLine: 3,
+      sourceOrder: 1,
+    }),
+    orderedRecord({
+      id: "record-a-insertion",
+      sourceKey: "fixture|a-insertion",
+      sourceFile: "same-source.jsonl",
+      sourceLine: 3,
+      sourceOrder: 1,
+    }),
+  ])
+
+  assert.deepEqual(
+    readConversationDay(stateDir, "2026-07-25").map((record) => record.id),
+    [
+      "record-a-source",
+      "record-z-insertion",
+      "record-a-insertion",
+      "record-z-source",
+    ],
+  )
+
+  function orderedRecord({
+    id,
+    sourceKey,
+    sourceFile,
+    sourceLine,
+    sourceOrder,
+  }) {
+    return {
+      id,
+      type: "operation",
+      timestamp,
+      runtimeId: "codex",
+      threadId: "thread-order",
+      turnId: "turn-order",
+      workspaceRoot: WORKSPACE_ROOT,
+      text: "[fixture_tool]",
+      meta: {
+        toolName: "fixture_tool",
+        operationKind: "mcp",
+      },
+      source: {
+        provider: "codex",
+        sourceType: "codex.operation",
+        sourceKey,
+        sourceFile,
+        sourceLine,
+        sourceOrder,
+      },
+    }
+  }
+})
+
+test("conversation writer replaces malformed sticker media with the canonical item", (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-sticker-merge-"))
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
+  const writer = new ConversationWriter({
+    conversationDir: path.join(stateDir, "conversations"),
+  })
+  const sourceKey = "codex|thread-sticker|turn-sticker|call-sticker|visible|sticker"
+  const malformed = {
+    kind: "sticker",
+    stickerId: "stk_001",
+    fileName: "stk_001.gif",
+    path: "D:/study/.cyberboss/stickers/assets//stk_001.gif/",
+    relativePath: "stk_001.gif",
+    isImage: true,
+  }
+  const canonical = {
+    kind: "sticker",
+    stickerId: "stk_001",
+    fileName: "stk_001.gif",
+    path: "D:/study/.cyberboss/stickers/assets/stk_001.gif",
+    relativePath: "stickers/assets/stk_001.gif",
+    isImage: true,
+  }
+  const buildRecord = (media) => ({
+    type: "assistant",
+    variant: "visible",
+    timestamp: "2026-07-25T12:10:00.000Z",
+    runtimeId: "codex",
+    threadId: "thread-sticker",
+    turnId: "turn-sticker",
+    workspaceRoot: WORKSPACE_ROOT,
+    text: "",
+    meta: {
+      attachments: [media],
+      stickers: [media],
+      files: [],
+    },
+    source: {
+      provider: "codex",
+      sourceType: "codex.visible",
+      sourceKey,
+      sourceFile: "fixture-sticker.jsonl",
+      sourceLine: 1,
+      sourceOrder: 2,
+      callId: "call-sticker",
+    },
+  })
+
+  writer.writeRecords([buildRecord(malformed)])
+  writer.writeRecords([buildRecord(canonical)])
+  writer.writeRecords([buildRecord(malformed)])
+
+  const [record] = readConversationDay(stateDir, "2026-07-25")
+  assert.deepEqual(record.meta.stickers, [canonical])
+  assert.deepEqual(record.meta.attachments, [canonical])
+})
+
 test("realtime checkpoint survives restart and does not replay deleted history", () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-restart-"))
   const sourceFile = path.join(stateDir, "claude-restart.jsonl")

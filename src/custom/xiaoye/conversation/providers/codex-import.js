@@ -6,7 +6,7 @@ const {
   buildVisibleAssistantRecordFromToolCall,
 } = require("../normalize-operation")
 const { extractSavedAttachmentsFromText } = require("../extract-saved-attachments")
-const { normalizeMediaList } = require("../normalize-media")
+const { mergeMediaLists, normalizeMediaList } = require("../normalize-media")
 const { buildConversationUserRecord, isApprovalReply } = require("../normalize-prompt")
 const { normalizeConversationRecord } = require("../normalize-record")
 const {
@@ -324,7 +324,9 @@ class CodexImportParser {
     const callId = normalizeText(payload.call_id)
     const pending = this.consumePendingMcpOperation({
       callId,
+      server: normalizeText(invocation.server),
       toolName,
+      args,
     })
     const completedOperation = this.buildOperationRecord({
       timestamp,
@@ -426,7 +428,9 @@ class CodexImportParser {
       if (call.isMcp) {
         this.pendingMcpOperations.push({
           outerCallId,
+          server: call.server,
           toolName: call.toolName,
+          argsSignature: buildStaticArgumentsSignature(call.args),
           turnId: this.currentTurnId,
           record,
         })
@@ -438,8 +442,14 @@ class CodexImportParser {
     return records
   }
 
-  consumePendingMcpOperation({ callId = "", toolName = "" } = {}) {
+  consumePendingMcpOperation({
+    callId = "",
+    server = "",
+    toolName = "",
+    args = {},
+  } = {}) {
     const normalizedCallId = normalizeText(callId)
+    const normalizedServer = normalizeText(server)
     const normalizedToolName = normalizeText(toolName)
     let index = this.pendingMcpOperations.findIndex((entry) => (
       entry.turnId === this.currentTurnId
@@ -449,9 +459,19 @@ class CodexImportParser {
         || entry.record?.source?.callId === normalizedCallId
       )
     ))
+    const argsSignature = buildStaticArgumentsSignature(args)
+    if (index < 0 && argsSignature) {
+      index = this.pendingMcpOperations.findIndex((entry) => (
+        entry.turnId === this.currentTurnId
+        && entry.server === normalizedServer
+        && entry.toolName === normalizedToolName
+        && entry.argsSignature === argsSignature
+      ))
+    }
     if (index < 0) {
       index = this.pendingMcpOperations.findIndex((entry) => (
         entry.turnId === this.currentTurnId
+        && (!normalizedServer || !entry.server || entry.server === normalizedServer)
         && entry.toolName === normalizedToolName
       ))
     }
@@ -686,18 +706,7 @@ function snapshotUserRecord(record) {
 }
 
 function mergeMedia(left = [], right = []) {
-  const items = [...(Array.isArray(left) ? left : []), ...(Array.isArray(right) ? right : [])]
-  const result = []
-  const seen = new Set()
-  for (const item of items) {
-    const signature = JSON.stringify(item)
-    if (seen.has(signature)) {
-      continue
-    }
-    seen.add(signature)
-    result.push(item)
-  }
-  return result
+  return mergeMediaLists(left, right)
 }
 
 function normalizeText(value) {
@@ -717,9 +726,7 @@ function scanExecWrapperToolCalls(input = "") {
     const argumentText = readBalancedCallArguments(source, argumentStart)
     calls.push({
       rawToolName,
-      toolName: rawToolName.startsWith("mcp__")
-        ? normalizeToolName(rawToolName)
-        : rawToolName,
+      ...parseStaticToolIdentity(rawToolName),
       args: parseStaticToolArguments(argumentText),
       isMcp: rawToolName.startsWith("mcp__"),
     })
@@ -780,6 +787,40 @@ function decodeStaticString(value = "") {
     .replace(/\\n/gu, "\n")
     .replace(/\\t/gu, "\t")
     .replace(/\\(["'`\\])/gu, "$1")
+}
+
+function parseStaticToolIdentity(rawToolName = "") {
+  const normalized = normalizeText(rawToolName)
+  if (!normalized.startsWith("mcp__")) {
+    return {
+      server: "",
+      toolName: normalized,
+    }
+  }
+  const parts = normalized.split("__").filter(Boolean)
+  return {
+    server: parts.length > 2 ? parts.slice(1, -1).join("__") : "",
+    toolName: normalizeToolName(normalized),
+  }
+}
+
+function buildStaticArgumentsSignature(args = {}) {
+  if (!args || typeof args !== "object" || Array.isArray(args) || !Object.keys(args).length) {
+    return ""
+  }
+  return JSON.stringify(sortObjectKeys(args))
+}
+
+function sortObjectKeys(value) {
+  if (Array.isArray(value)) {
+    return value.map(sortObjectKeys)
+  }
+  if (!value || typeof value !== "object") {
+    return value
+  }
+  return Object.fromEntries(
+    Object.keys(value).sort().map((key) => [key, sortObjectKeys(value[key])]),
+  )
 }
 
 module.exports = {

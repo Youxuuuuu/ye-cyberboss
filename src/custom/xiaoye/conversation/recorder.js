@@ -2,7 +2,7 @@ const fs = require("fs")
 const path = require("path")
 
 const { normalizeConversationRecord } = require("./normalize-record")
-const { normalizeMediaList } = require("./normalize-media")
+const { mergeMediaLists, normalizeMediaList } = require("./normalize-media")
 const { ConversationWriter } = require("./writer")
 const { RealtimeTailer } = require("./realtime-tailer")
 const { ConversationSourceLineResolver } = require("./source-line-resolver")
@@ -953,17 +953,7 @@ function hasMedia(subject = {}) {
 }
 
 function mergeMediaArrays(left = [], right = []) {
-  const result = []
-  const seen = new Set()
-  for (const item of [...(Array.isArray(left) ? left : []), ...(Array.isArray(right) ? right : [])]) {
-    const signature = JSON.stringify(item)
-    if (seen.has(signature)) {
-      continue
-    }
-    seen.add(signature)
-    result.push(item)
-  }
-  return result
+  return mergeMediaLists(left, right)
 }
 
 function buildMediaSignature(subject = {}) {

@@ -299,6 +299,61 @@ test("codex realtime and import preserve each MCP operation and its visible assi
   }
 })
 
+test("codex matches repeated MCP wrapper calls by arguments before fallback order", (t) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-codex-mcp-match-"))
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }))
+  const sourceFile = path.join(rootDir, "codex-mcp-match.jsonl")
+  const firstPath = `${WORKSPACE_ROOT}/tmp/fixture-first.txt`
+  const secondPath = `${WORKSPACE_ROOT}/tmp/fixture-second.txt`
+  const rawRecords = [
+    codexSession("thread-mcp-match"),
+    codexTurn("turn-mcp-match", "2026-07-25T08:53:00.010Z"),
+    codexCustomToolCall({
+      callId: "call-mcp-match-wrapper",
+      input: [
+        `await tools.mcp__cyberboss_tools__cyberboss_channel_send_file({filePath: "${firstPath}"})`,
+        `await tools.mcp__cyberboss_tools__cyberboss_channel_send_file({filePath: "${secondPath}"})`,
+      ].join("\n"),
+      timestamp: "2026-07-25T08:53:01.000Z",
+    }),
+    codexMcpToolCallEnd({
+      callId: "mcp-second",
+      server: "cyberboss_tools",
+      tool: "cyberboss_channel_send_file",
+      args: { filePath: secondPath },
+      result: { path: secondPath },
+      timestamp: "2026-07-25T08:53:01.010Z",
+    }),
+    codexMcpToolCallEnd({
+      callId: "mcp-first",
+      server: "cyberboss_tools",
+      tool: "cyberboss_channel_send_file",
+      args: { filePath: firstPath },
+      result: { path: firstPath },
+      timestamp: "2026-07-25T08:53:01.020Z",
+    }),
+    codexTaskComplete("2026-07-25T08:53:01.030Z"),
+  ]
+  writeJsonl(sourceFile, rawRecords)
+
+  const { realtime, imported } = runBothModes({
+    rootDir,
+    runtimeId: "codex",
+    sourceFile,
+    rawRecords,
+    date: "2026-07-25",
+  })
+
+  for (const records of [realtime, imported]) {
+    assert.deepEqual(
+      records
+        .filter((record) => record.type === "operation")
+        .map((record) => record.meta.path),
+      [firstPath, secondPath],
+    )
+  }
+})
+
 test("codex realtime and import expose a terminal wrapper as shell_command, never exec", (t) => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-codex-exec-"))
   t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }))

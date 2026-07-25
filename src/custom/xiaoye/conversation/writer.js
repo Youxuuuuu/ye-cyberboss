@@ -1,6 +1,7 @@
 const fs = require("fs")
 const path = require("path")
 
+const { mergeMediaLists } = require("./normalize-media")
 const { normalizeConversationRecord } = require("./normalize-record")
 
 class ConversationWriter {
@@ -433,17 +434,7 @@ function mergeMeta(existing = {}, incoming = {}) {
 }
 
 function mergeMediaArrays(existing = [], incoming = []) {
-  const result = []
-  const seen = new Set()
-  for (const item of [...(Array.isArray(existing) ? existing : []), ...(Array.isArray(incoming) ? incoming : [])]) {
-    const signature = JSON.stringify(item)
-    if (seen.has(signature)) {
-      continue
-    }
-    seen.add(signature)
-    result.push(item)
-  }
-  return result
+  return mergeMediaLists(existing, incoming)
 }
 
 function compareConversationRecords(left, right) {
@@ -451,6 +442,11 @@ function compareConversationRecords(left, right) {
   const rightTime = Date.parse(right.timestamp)
   if (leftTime !== rightTime) {
     return leftTime - rightTime
+  }
+  const leftFile = String(left?.source?.sourceFile || "")
+  const rightFile = String(right?.source?.sourceFile || "")
+  if (leftFile !== rightFile) {
+    return leftFile.localeCompare(rightFile)
   }
   const leftLine = Number(left?.source?.sourceLine || 0)
   const rightLine = Number(right?.source?.sourceLine || 0)
@@ -462,7 +458,9 @@ function compareConversationRecords(left, right) {
   if (leftOrder !== rightOrder) {
     return leftOrder - rightOrder
   }
-  return String(left.id).localeCompare(String(right.id))
+  // Array.prototype.sort is stable, so an exact source tie keeps the original
+  // insertion order instead of allowing a derived record id to reshuffle it.
+  return 0
 }
 
 function choosePreferredString(primary, fallback) {
