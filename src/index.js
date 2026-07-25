@@ -9,9 +9,9 @@ const { CyberbossApp } = require("./core/app");
 const { runSystemCheckinPoller } = require("./app/system-checkin-poller");
 const { buildTerminalHelpText } = require("./core/command-registry");
 const { ensureStickerCatalogFilesSync } = require("./services/sticker-service");
-const { createProjectTooling } = require("./tools/create-project-tooling");
 const { runToolMcpServer } = require("./tools/mcp-stdio-server");
 const { normalizeWorkspaceRoot } = require("./core/workspace-root");
+const { createXiaoyeProjectTooling } = require("./custom/xiaoye");
 const { ConversationImporter } = require("./custom/xiaoye/conversation");
 
 function ensureDefaultStateDirectory() {
@@ -138,7 +138,7 @@ async function main() {
   if (command === "tool-mcp-server") {
     const runtimeId = readFlagValue(argv.slice(1), "--runtime-id") || "";
     const workspaceRoot = normalizeWorkspaceRoot(readFlagValue(argv.slice(1), "--workspace-root") || process.cwd());
-    const { toolHost } = createProjectTooling(config);
+    const { toolHost } = createXiaoyeProjectTooling(config);
     runToolMcpServer({ toolHost, runtimeId, workspaceRoot });
     return;
   }

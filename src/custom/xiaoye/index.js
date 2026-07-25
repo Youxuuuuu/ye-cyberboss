@@ -1,5 +1,9 @@
+const { createChannelRouter } = require("../../adapters/channel/router")
+const { createWeixinChannelAdapter } = require("../../adapters/channel/weixin")
+const { createProjectTooling } = require("../../tools/create-project-tooling")
 const { createConversationArchive } = require("./conversation")
 const { createMurmurLaneModule } = require("./murmurlane")
+const { createWebChatDeliveryClient } = require("./murmurlane/webchat/delivery-client")
 
 function createXiaoyeModules({ config, cyberbossPort } = {}) {
   const conversation = createConversationArchive({ config })
@@ -90,6 +94,17 @@ function createXiaoyeModules({ config, cyberbossPort } = {}) {
   }
 }
 
+function createXiaoyeProjectTooling(config, options = {}) {
+  const channelAdapter = options.channelAdapter || createChannelRouter({
+    weixin: createWeixinChannelAdapter(config),
+    web: createWebChatDeliveryClient({ config }),
+  })
+  return createProjectTooling(config, {
+    ...options,
+    channelAdapter,
+  })
+}
+
 function createMurmurLanePort(cyberbossPort) {
   return {
     resolveWeixinAccount: (...args) => cyberbossPort.resolveWeixinAccount(...args),
@@ -116,4 +131,4 @@ function formatErrorMessage(error) {
   return error instanceof Error ? error.message : String(error || "unknown error")
 }
 
-module.exports = { createXiaoyeModules }
+module.exports = { createXiaoyeModules, createXiaoyeProjectTooling }

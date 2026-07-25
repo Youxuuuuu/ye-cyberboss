@@ -134,6 +134,18 @@ function createWebChatServer({ config, chatService, adapter }) {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/chat/internal/file-deliveries") {
+      const body = await readJsonBody(request, 1024 * 1024)
+      const delivery = await normalizeInternalFileDelivery({
+        body,
+        identity,
+        stateDir: config.stateDir,
+      })
+      await adapter.sendFile(delivery)
+      sendJson(response, 202, { accepted: true })
+      return
+    }
+
     if (request.method === "POST" && url.pathname === "/api/chat/messages") {
       const body = await readJsonBody(request, requestBodyLimit(config));
       const contract = normalizeWebChatSendContract(body);
@@ -223,6 +235,69 @@ function createWebChatServer({ config, chatService, adapter }) {
     requestLedger,
     address() { return server?.address?.() || null; },
   };
+}
+
+async function normalizeInternalFileDelivery({ body = {}, identity = {}, stateDir = "" } = {}) {
+  const stateRoot = path.resolve(stateDir || ".")
+  const requestedUserId = normalizeText(body.userId)
+  const senderId = normalizeText(identity.senderId)
+  if (requestedUserId && requestedUserId !== senderId) {
+    const error = new Error("web chat delivery sender is not allowed")
+    error.statusCode = 403
+    throw error
+  }
+
+  const requestedPath = normalizeText(body.filePath || body.file?.path || body.file?.absolutePath)
+  if (!requestedPath) {
+    const error = new Error("web chat delivery file path is required")
+    error.statusCode = 400
+    throw error
+  }
+  const absolutePath = path.resolve(requestedPath)
+  if (!isPathWithinRoot(absolutePath, stateRoot)) {
+    const error = new Error("web chat delivery file is outside the state directory")
+    error.statusCode = 403
+    throw error
+  }
+  let stat
+  try {
+    stat = await fs.promises.stat(absolutePath)
+  } catch {
+    const error = new Error("web chat delivery file was not found")
+    error.statusCode = 404
+    throw error
+  }
+  if (!stat.isFile()) {
+    const error = new Error("web chat delivery path is not a file")
+    error.statusCode = 400
+    throw error
+  }
+
+  const suppliedFile = body.file && typeof body.file === "object" && !Array.isArray(body.file)
+    ? body.file
+    : {}
+  const file = {
+    ...suppliedFile,
+    path: absolutePath,
+    absolutePath,
+    relativePath: path.relative(stateRoot, absolutePath).replace(/\\/g, "/"),
+    fileName: normalizeText(suppliedFile.fileName) || path.basename(absolutePath),
+    contentType: normalizeText(suppliedFile.contentType) || mimeForPath(absolutePath).split(";")[0],
+  }
+  return {
+    userId: senderId,
+    filePath: absolutePath,
+    threadId: normalizeText(body.threadId),
+    turnId: normalizeText(body.turnId),
+    itemId: normalizeText(body.itemId),
+    messageId: normalizeText(body.messageId),
+    requestId: normalizeText(body.requestId),
+    logicalTurnId: normalizeText(body.logicalTurnId),
+    displayTurnId: normalizeText(body.displayTurnId),
+    transportTurnId: normalizeText(body.transportTurnId),
+    canonicalTurnId: normalizeText(body.canonicalTurnId),
+    file,
+  }
 }
 
 function authorize(request, url, response, configuredToken = "") {
