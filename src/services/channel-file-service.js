@@ -13,10 +13,15 @@ class ChannelFileService {
   }
 
   async sendToCurrentChat({ filePath = "", userId = "" } = {}, context = {}) {
+    const explicitProvider = normalizeChannelProvider(context?.provider);
     const explicitUserId = normalizeText(userId) || normalizeText(context?.senderId);
-    const webTarget = this.channelAdapter.getWebReplyTarget?.(explicitUserId) || null;
-    const account = webTarget ? null : resolveSelectedAccount(this.config);
-    const targetUserId = explicitUserId || (webTarget ? "" : resolvePreferredSenderId({
+    const webTarget = explicitProvider === "weixin"
+      ? null
+      : this.channelAdapter.getWebReplyTarget?.(explicitUserId) || null;
+    const deliveryProvider = explicitProvider || normalizeChannelProvider(webTarget?.provider);
+    const isWebDelivery = deliveryProvider === "web";
+    const account = isWebDelivery ? null : resolveSelectedAccount(this.config);
+    const targetUserId = explicitUserId || (isWebDelivery ? "" : resolvePreferredSenderId({
       config: this.config,
       accountId: account.accountId,
       sessionStore: this.sessionStore,
@@ -29,7 +34,7 @@ class ChannelFileService {
       ? loadPersistedContextTokens(this.config, account.accountId)
       : {};
     const contextToken = String(webTarget?.contextToken || contextTokens[targetUserId] || "").trim();
-    if (!contextToken) {
+    if (!contextToken && !isWebDelivery) {
       throw new Error(`Cannot find a context token for user ${targetUserId}. Let this user talk to the bot once first.`);
     }
 
@@ -50,21 +55,21 @@ class ChannelFileService {
       userId: targetUserId,
       status: 1,
       contextToken,
-      provider: webTarget?.provider,
+      provider: deliveryProvider,
       threadId: context?.threadId,
     }).catch(() => {});
     await this.channelAdapter.sendFile({
       userId: targetUserId,
       filePath: resolvedPath,
       contextToken,
-      provider: webTarget?.provider,
+      provider: deliveryProvider,
       threadId: context?.threadId,
     });
     await this.channelAdapter.sendTyping({
       userId: targetUserId,
       status: 0,
       contextToken,
-      provider: webTarget?.provider,
+      provider: deliveryProvider,
       threadId: context?.threadId,
     }).catch(() => {});
     return { userId: targetUserId, filePath: resolvedPath };
@@ -73,6 +78,11 @@ class ChannelFileService {
 
 function normalizeText(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeChannelProvider(value) {
+  const normalized = normalizeText(value).toLowerCase();
+  return normalized === "web" || normalized === "weixin" ? normalized : "";
 }
 
 module.exports = { ChannelFileService };

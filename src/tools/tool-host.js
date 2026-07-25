@@ -57,6 +57,7 @@ class ProjectToolHost {
       bindingKey: normalizeText(context.bindingKey) || normalizeText(active.bindingKey),
       accountId: normalizeText(context.accountId) || normalizeText(active.accountId),
       senderId: normalizeText(context.senderId) || normalizeText(active.senderId),
+      provider: normalizeText(context.provider) || normalizeText(active.provider),
     };
   }
 }

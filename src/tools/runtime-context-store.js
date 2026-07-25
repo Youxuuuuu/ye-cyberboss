@@ -38,6 +38,7 @@ class RuntimeContextStore {
     bindingKey = "",
     accountId = "",
     senderId = "",
+    provider = "",
   } = {}) {
     const normalizedWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot);
     if (!normalizedWorkspaceRoot) {
@@ -50,6 +51,7 @@ class RuntimeContextStore {
       bindingKey: normalizeText(bindingKey),
       accountId: normalizeText(accountId),
       senderId: normalizeText(senderId),
+      provider: normalizeText(provider),
       updatedAt: new Date().toISOString(),
     };
     this.state.contextsByWorkspaceRoot = {
@@ -123,6 +125,7 @@ function normalizeRuntimeContextEntry(entry) {
     bindingKey: normalizeText(entry?.bindingKey),
     accountId: normalizeText(entry?.accountId),
     senderId: normalizeText(entry?.senderId),
+    provider: normalizeText(entry?.provider),
     updatedAt: normalizeText(entry?.updatedAt) || new Date(0).toISOString(),
   };
 }

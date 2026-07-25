@@ -512,6 +512,7 @@ class CyberbossApp {
         bindingKey,
         accountId: prepared.accountId,
         senderId: prepared.senderId,
+        provider: prepared.provider,
       });
       this.turnGateStore.attachThread(pendingScopeKey, turn.threadId);
       this.xiaoye.handleRuntimeTurnStarted({
