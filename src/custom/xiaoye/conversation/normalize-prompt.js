@@ -33,7 +33,10 @@ function classifyConversationPromptVisibility(text, context = {}) {
     }
   }
 
-  if (looksSyntheticCodexContext(candidate)) {
+  if (
+    looksCompositeCodexBootstrap(candidate, context)
+    || looksSyntheticCodexContext(candidate)
+  ) {
     return {
       action: "drop",
       systemKind: "",
@@ -139,6 +142,16 @@ function looksSyntheticCodexContext(text = "") {
     || normalized.startsWith("Visual context from attachments:")
     || normalized.includes(">>> TRANSCRIPT START")
     || normalized.includes(">>> TRANSCRIPT DELTA START")
+}
+
+function looksCompositeCodexBootstrap(text = "", context = {}) {
+  if (normalizeText(context.runtimeId).toLowerCase() !== "codex") {
+    return false
+  }
+  const normalized = normalizeText(text)
+  return normalized.startsWith("<recommended_plugins>")
+    && normalized.includes("# AGENTS.md instructions")
+    && normalized.includes("<environment_context>")
 }
 
 function normalizeText(value) {

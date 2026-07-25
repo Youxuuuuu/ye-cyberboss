@@ -356,6 +356,82 @@ test("merged web inbound preserves a nested quoted envelope", (t) => {
   assert.equal(record.meta.quote, "[表情包]")
 })
 
+test("codex realtime and import hide only the composite bootstrap context", (t) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-codex-bootstrap-"))
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }))
+  const sourceFile = path.join(rootDir, "codex-bootstrap.jsonl")
+  const bootstrap = [
+    "<recommended_plugins>",
+    "fixture plugin metadata",
+    "</recommended_plugins>",
+    "# AGENTS.md instructions for D:\\study\\cyberboss",
+    "<environment_context>",
+    "<cwd>D:\\study\\cyberboss</cwd>",
+    "</environment_context>",
+  ].join("\n")
+  const ordinaryDiscussion = "我想讨论 AGENTS.md 与 <environment_context> 的职责区别"
+  const rawRecords = [
+    codexSession("thread-bootstrap"),
+    codexTurn("turn-bootstrap", "2026-07-25T09:10:00.010Z"),
+    codexUser(bootstrap, "2026-07-25T09:10:00.020Z"),
+    codexTurn("turn-ordinary", "2026-07-25T09:11:00.010Z"),
+    codexUser(ordinaryDiscussion, "2026-07-25T09:11:00.020Z"),
+  ]
+  writeJsonl(sourceFile, rawRecords)
+
+  const { realtime, imported } = runBothModes({
+    rootDir,
+    runtimeId: "codex",
+    sourceFile,
+    rawRecords,
+    date: "2026-07-25",
+  })
+
+  for (const records of [realtime, imported]) {
+    const users = records.filter((record) => record.type === "user")
+    assert.equal(users.length, 1)
+    assert.equal(users[0].text, ordinaryDiscussion)
+  }
+})
+
+test("claudecode realtime and import leave composite context text unchanged", (t) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-claude-bootstrap-"))
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }))
+  const sourceFile = path.join(rootDir, "claude-bootstrap.jsonl")
+  const text = [
+    "<recommended_plugins>",
+    "fixture plugin metadata",
+    "</recommended_plugins>",
+    "# AGENTS.md instructions for a fixture",
+    "<environment_context>",
+    "<cwd>fixture</cwd>",
+    "</environment_context>",
+  ].join("\n")
+  const rawRecords = [
+    claudeUser({
+      sessionId: "thread-claude-bootstrap",
+      promptId: "turn-claude-bootstrap",
+      uuid: "user-claude-bootstrap",
+      text,
+      timestamp: "2026-07-25T09:15:00.000Z",
+    }),
+  ]
+  writeJsonl(sourceFile, rawRecords)
+
+  const { realtime, imported } = runBothModes({
+    rootDir,
+    runtimeId: "claudecode",
+    sourceFile,
+    rawRecords,
+    date: "2026-07-25",
+  })
+
+  for (const records of [realtime, imported]) {
+    assert.equal(records.length, 1)
+    assert.equal(records[0].text, text)
+  }
+})
+
 function createArchive(stateDir) {
   return new ConversationArchive({
     config: {
