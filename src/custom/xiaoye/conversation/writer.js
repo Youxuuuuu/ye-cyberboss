@@ -457,6 +457,11 @@ function compareConversationRecords(left, right) {
   if (leftLine !== rightLine) {
     return leftLine - rightLine
   }
+  const leftOrder = Number(left?.source?.sourceOrder || 0)
+  const rightOrder = Number(right?.source?.sourceOrder || 0)
+  if (leftOrder !== rightOrder) {
+    return leftOrder - rightOrder
+  }
   return String(left.id).localeCompare(String(right.id))
 }
 

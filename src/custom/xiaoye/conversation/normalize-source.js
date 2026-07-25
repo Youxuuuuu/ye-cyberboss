@@ -8,6 +8,7 @@ function normalizeSource(source = {}, extra = {}) {
     sourceType: normalizeText(source.sourceType) || normalizeText(extra.sourceType) || "unknown",
     sourceFile: normalizeText(source.sourceFile),
     sourceLine: normalizePositiveInt(source.sourceLine),
+    sourceOrder: normalizePositiveInt(source.sourceOrder),
     sourceKey: normalizeText(source.sourceKey),
     rawId: normalizeText(source.rawId) || normalizeText(extra.rawId),
     callId: normalizeText(source.callId) || normalizeText(extra.callId),

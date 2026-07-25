@@ -9,7 +9,11 @@ const { extractSavedAttachmentsFromText } = require("../extract-saved-attachment
 const { normalizeMediaList } = require("../normalize-media")
 const { buildConversationUserRecord, isApprovalReply } = require("../normalize-prompt")
 const { normalizeConversationRecord } = require("../normalize-record")
-const { normalizeToolName, parseStructuredValue } = require("../normalize-tool-call")
+const {
+  extractTextPayload,
+  normalizeToolName,
+  parseStructuredValue,
+} = require("../normalize-tool-call")
 const { normalizeTimestamp } = require("../normalize-time")
 
 class CodexImportParser {
@@ -21,6 +25,7 @@ class CodexImportParser {
     this.currentWorkspaceRoot = ""
     this.maxStateEntries = Number(maxStateEntries) > 0 ? Math.floor(Number(maxStateEntries)) : 5000
     this.pendingOperations = new Map()
+    this.pendingMcpOperations = []
     this.seenFallbackMessages = new Set()
     this.pendingAgentMessagesByTurn = new Map()
     this.seenCanonicalAssistantMessages = new Set()
@@ -73,7 +78,10 @@ class CodexImportParser {
       return []
     }
     if (payloadType === "task_complete") {
-      return this.flushPendingAgentMessages(this.currentTurnId)
+      const records = this.flushPendingAgentMessages(this.currentTurnId)
+      this.pendingMcpOperations = this.pendingMcpOperations
+        .filter((entry) => entry.turnId !== this.currentTurnId)
+      return records
     }
     if (payloadType === "patch_apply_end") {
       const operationRecord = this.buildOperationRecord({
@@ -219,8 +227,13 @@ class CodexImportParser {
     }
 
     if (payloadType === "function_call" || payloadType === "custom_tool_call" || payloadType === "patch_apply_end") {
-      if (payloadType === "custom_tool_call" && isMcpExecWrapper(payload)) {
-        return []
+      if (payloadType === "custom_tool_call" && normalizeText(payload.name) === "exec") {
+        return this.parseExecWrapper({
+          payload,
+          timestamp,
+          sourceFile,
+          sourceLine,
+        })
       }
       const operationRecord = this.buildOperationRecord({
         timestamp,
@@ -306,10 +319,14 @@ class CodexImportParser {
     const args = invocation.arguments && typeof invocation.arguments === "object"
       ? invocation.arguments
       : parseStructuredValue(invocation.arguments)
-    const outputText = stringifyStructuredValue(payload.result)
+    const outputText = extractTextPayload(payload.result)
     const timestamp = normalizeTimestamp(raw.timestamp, fallbackTimestamp)
     const callId = normalizeText(payload.call_id)
-    const operationRecord = this.buildOperationRecord({
+    const pending = this.consumePendingMcpOperation({
+      callId,
+      toolName,
+    })
+    const completedOperation = this.buildOperationRecord({
       timestamp,
       payload: {
         type: "mcp_tool_call_end",
@@ -319,11 +336,22 @@ class CodexImportParser {
       },
       sourceFile,
       sourceLine,
+      sourceOrder: 1,
     })
-    if (!operationRecord) {
+    if (!completedOperation) {
       return []
     }
 
+    const operationRecord = pending
+      ? normalizeConversationRecord({
+        ...completedOperation,
+        timestamp: pending.record.timestamp,
+        source: {
+          ...pending.record.source,
+          sourceOrder: pending.record.source.sourceOrder || 1,
+        },
+      })
+      : completedOperation
     const records = [normalizeConversationRecord({
       ...operationRecord,
       meta: {
@@ -353,13 +381,87 @@ class CodexImportParser {
           sourceLine,
           rawId: `visible:${sourceLine}`,
           callId,
+          sourceOrder: 2,
         },
       }))
     }
     return records
   }
 
-  buildOperationRecord({ timestamp, payload, sourceFile, sourceLine }) {
+  parseExecWrapper({ payload, timestamp, sourceFile, sourceLine }) {
+    const outerCallId = normalizeText(payload.call_id)
+    const nestedCalls = scanExecWrapperToolCalls(payload.input)
+    const calls = nestedCalls.length
+      ? nestedCalls
+      : [{
+        rawToolName: "command",
+        toolName: "command",
+        args: {},
+        isMcp: false,
+      }]
+    const records = []
+
+    calls.forEach((call, index) => {
+      const operationCallId = [
+        outerCallId || `line-${sourceLine}`,
+        index + 1,
+        call.toolName,
+      ].join(":")
+      const record = this.buildOperationRecord({
+        timestamp,
+        payload: {
+          type: "custom_tool_call",
+          name: call.toolName,
+          call_id: operationCallId,
+          arguments: call.args,
+        },
+        sourceFile,
+        sourceLine,
+        sourceOrder: index + 1,
+      })
+      if (!record) {
+        return
+      }
+      records.push(record)
+      if (call.isMcp) {
+        this.pendingMcpOperations.push({
+          outerCallId,
+          toolName: call.toolName,
+          turnId: this.currentTurnId,
+          record,
+        })
+        while (this.pendingMcpOperations.length > this.maxStateEntries) {
+          this.pendingMcpOperations.shift()
+        }
+      }
+    })
+    return records
+  }
+
+  consumePendingMcpOperation({ callId = "", toolName = "" } = {}) {
+    const normalizedCallId = normalizeText(callId)
+    const normalizedToolName = normalizeText(toolName)
+    let index = this.pendingMcpOperations.findIndex((entry) => (
+      entry.turnId === this.currentTurnId
+      && entry.toolName === normalizedToolName
+      && (
+        entry.outerCallId === normalizedCallId
+        || entry.record?.source?.callId === normalizedCallId
+      )
+    ))
+    if (index < 0) {
+      index = this.pendingMcpOperations.findIndex((entry) => (
+        entry.turnId === this.currentTurnId
+        && entry.toolName === normalizedToolName
+      ))
+    }
+    if (index < 0) {
+      return null
+    }
+    return this.pendingMcpOperations.splice(index, 1)[0] || null
+  }
+
+  buildOperationRecord({ timestamp, payload, sourceFile, sourceLine, sourceOrder = 0 }) {
     const callId = normalizeText(payload.call_id)
     const rawToolName = normalizeText(payload.name || payload.type)
     const toolName = normalizeToolName(rawToolName)
@@ -393,6 +495,7 @@ class CodexImportParser {
         sourceLine,
         rawId: `${normalizeText(payload.type)}:${sourceLine}`,
         callId,
+        sourceOrder,
       },
       _operationArgs: args,
     })
@@ -601,23 +704,82 @@ function normalizeText(value) {
   return typeof value === "string" ? value.trim() : ""
 }
 
-function isMcpExecWrapper(payload = {}) {
-  return normalizeText(payload.name) === "exec"
-    && normalizeText(payload.input).includes("tools.mcp__")
+function scanExecWrapperToolCalls(input = "") {
+  const source = String(input || "")
+  const calls = []
+  const pattern = /tools\.([A-Za-z_$][\w$]*)\s*\(/gu
+  for (const match of source.matchAll(pattern)) {
+    const rawToolName = normalizeText(match[1])
+    if (!rawToolName) {
+      continue
+    }
+    const argumentStart = Number(match.index) + match[0].length
+    const argumentText = readBalancedCallArguments(source, argumentStart)
+    calls.push({
+      rawToolName,
+      toolName: rawToolName.startsWith("mcp__")
+        ? normalizeToolName(rawToolName)
+        : rawToolName,
+      args: parseStaticToolArguments(argumentText),
+      isMcp: rawToolName.startsWith("mcp__"),
+    })
+  }
+  return calls
 }
 
-function stringifyStructuredValue(value) {
-  if (typeof value === "string") {
-    return value
+function readBalancedCallArguments(source, startIndex) {
+  let depth = 1
+  let quote = ""
+  let escaped = false
+  for (let index = startIndex; index < source.length; index += 1) {
+    const character = source[index]
+    if (quote) {
+      if (escaped) {
+        escaped = false
+      } else if (character === "\\") {
+        escaped = true
+      } else if (character === quote) {
+        quote = ""
+      }
+      continue
+    }
+    if (character === "\"" || character === "'" || character === "`") {
+      quote = character
+      continue
+    }
+    if (character === "(") {
+      depth += 1
+      continue
+    }
+    if (character === ")") {
+      depth -= 1
+      if (depth === 0) {
+        return source.slice(startIndex, index).trim()
+      }
+    }
   }
-  if (value == null) {
-    return ""
+  return source.slice(startIndex).trim()
+}
+
+function parseStaticToolArguments(argumentText = "") {
+  const args = {}
+  const pattern = /\b(command|input|patch|filePath|stickerId|id|type|path)\s*:\s*(["'`])((?:\\[\s\S]|(?!\2)[\s\S])*?)\2/gu
+  for (const match of String(argumentText || "").matchAll(pattern)) {
+    const key = normalizeText(match[1])
+    if (!key || Object.hasOwn(args, key)) {
+      continue
+    }
+    args[key] = decodeStaticString(match[3])
   }
-  try {
-    return JSON.stringify(value)
-  } catch {
-    return String(value)
-  }
+  return args
+}
+
+function decodeStaticString(value = "") {
+  return String(value || "")
+    .replace(/\\r/gu, "\r")
+    .replace(/\\n/gu, "\n")
+    .replace(/\\t/gu, "\t")
+    .replace(/\\(["'`\\])/gu, "$1")
 }
 
 module.exports = {

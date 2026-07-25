@@ -39,6 +39,7 @@ const ALLOWED_SOURCE_KEYS = new Set([
   "sourceFile",
   "sourceKey",
   "sourceLine",
+  "sourceOrder",
   "sourceType",
   "uuid",
 ])

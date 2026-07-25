@@ -259,7 +259,11 @@ function extractTextPayload(value) {
     if (preferred.length) {
       return preferred.join("\n").trim()
     }
-    return ""
+    return Object.values(value)
+      .map((entry) => extractTextPayload(entry))
+      .filter(Boolean)
+      .join("\n")
+      .trim()
   }
   return ""
 }

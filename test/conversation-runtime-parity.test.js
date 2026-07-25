@@ -263,10 +263,43 @@ test("codex realtime and import preserve each MCP operation and its visible assi
       stickerId: "sticker-fixture",
     })
     assert.equal(visible[2].meta.attachments.length, 1)
+    const ordered = records
+      .filter((record) => (
+        record.type === "operation"
+        || (
+          record.type === "assistant"
+          && (
+            record.meta.attachments.length
+            || record.meta.files.length
+            || record.meta.stickers.length
+          )
+        )
+      ))
+      .map((record) => (
+        record.type === "operation"
+          ? `operation:${record.meta.toolName}`
+          : `result:${record.meta.stickers.length
+            ? "sticker"
+            : record.meta.files.length
+              ? "file"
+              : "image"}`
+      ))
+    assert.ok(
+      ordered.lastIndexOf("operation:cyberboss_channel_send_file")
+        < ordered.indexOf("result:image"),
+    )
+    assert.ok(
+      ordered.lastIndexOf("operation:cyberboss_channel_send_file")
+        < ordered.indexOf("result:file"),
+    )
+    assert.ok(
+      ordered.indexOf("operation:cyberboss_sticker_send")
+        < ordered.indexOf("result:sticker"),
+    )
   }
 })
 
-test("codex realtime and import keep an ordinary exec operation", (t) => {
+test("codex realtime and import expose a terminal wrapper as shell_command, never exec", (t) => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-codex-exec-"))
   t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }))
   const sourceFile = path.join(rootDir, "codex-exec.jsonl")
@@ -275,7 +308,12 @@ test("codex realtime and import keep an ordinary exec operation", (t) => {
     codexTurn("turn-exec", "2026-07-25T08:55:00.010Z"),
     codexCustomToolCall({
       callId: "call-exec",
-      input: "Get-ChildItem -Path .",
+      input: [
+        "const result = await tools.shell_command({",
+        "  command: \"Get-ChildItem -Path .\"",
+        "})",
+        "text(result)",
+      ].join("\n"),
       timestamp: "2026-07-25T08:55:01.000Z",
     }),
     codexCustomToolCallOutput("call-exec", "completed", "2026-07-25T08:55:01.010Z"),
@@ -292,10 +330,103 @@ test("codex realtime and import keep an ordinary exec operation", (t) => {
   })
 
   for (const records of [realtime, imported]) {
-    assert.deepEqual(
-      records.filter((record) => record.type === "operation").map((record) => record.meta.toolName),
-      ["exec"],
-    )
+    const [operation] = records.filter((record) => record.type === "operation")
+    assert.equal(operation.meta.toolName, "shell_command")
+    assert.equal(operation.meta.operationKind, "glob")
+    assert.equal(operation.text.includes("[exec]"), false)
+  }
+})
+
+test("codex realtime and import expose an unclassified exec wrapper as command", (t) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-codex-command-"))
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }))
+  const sourceFile = path.join(rootDir, "codex-command.jsonl")
+  const rawRecords = [
+    codexSession("thread-command"),
+    codexTurn("turn-command", "2026-07-25T08:57:00.010Z"),
+    codexCustomToolCall({
+      callId: "call-command",
+      input: "const match = ALL_TOOLS.filter((item) => item.name === target); text(match)",
+      timestamp: "2026-07-25T08:57:01.000Z",
+    }),
+    codexCustomToolCallOutput("call-command", "completed", "2026-07-25T08:57:01.010Z"),
+    codexTaskComplete("2026-07-25T08:57:01.020Z"),
+  ]
+  writeJsonl(sourceFile, rawRecords)
+
+  const { realtime, imported } = runBothModes({
+    rootDir,
+    runtimeId: "codex",
+    sourceFile,
+    rawRecords,
+    date: "2026-07-25",
+  })
+
+  for (const records of [realtime, imported]) {
+    const [operation] = records.filter((record) => record.type === "operation")
+    assert.equal(operation.meta.toolName, "command")
+    assert.equal(operation.text, "[command]")
+  }
+})
+
+test("codex realtime and import parse a sticker path from nested MCP content", (t) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-codex-sticker-result-"))
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }))
+  const sourceFile = path.join(rootDir, "codex-sticker-result.jsonl")
+  const stickerPath = "D:\\study\\.cyberboss\\stickers\\assets\\stk_001.gif"
+  const rawRecords = [
+    codexSession("thread-sticker-result"),
+    codexTurn("turn-sticker-result", "2026-07-25T08:58:00.010Z"),
+    codexCustomToolCall({
+      callId: "call-sticker-wrapper",
+      input: "await tools.mcp__cyberboss_tools__cyberboss_sticker_send({stickerId: \"stk_001\"})",
+      timestamp: "2026-07-25T08:58:01.000Z",
+    }),
+    codexMcpToolCallEnd({
+      callId: "mcp-sticker-result",
+      server: "cyberboss_tools",
+      tool: "cyberboss_sticker_send",
+      args: { stickerId: "stk_001" },
+      result: {
+        Ok: {
+          content: [{
+            type: "text",
+            text: [
+              "Sticker sent: stk_001",
+              JSON.stringify({
+                stickerId: "stk_001",
+                filePath: stickerPath,
+              }),
+            ].join("\n"),
+          }],
+        },
+      },
+      timestamp: "2026-07-25T08:58:01.010Z",
+    }),
+    codexCustomToolCallOutput("call-sticker-wrapper", "completed", "2026-07-25T08:58:01.020Z"),
+    codexTaskComplete("2026-07-25T08:58:01.030Z"),
+  ]
+  writeJsonl(sourceFile, rawRecords)
+
+  const { realtime, imported } = runBothModes({
+    rootDir,
+    runtimeId: "codex",
+    sourceFile,
+    rawRecords,
+    date: "2026-07-25",
+    mediaStateDir: "D:/study/.cyberboss",
+  })
+
+  for (const records of [realtime, imported]) {
+    const sticker = records.find((record) => record.meta.stickers.length)
+    assert.deepEqual(pickMedia(sticker.meta.stickers[0]), {
+      fileName: "stk_001.gif",
+      kind: "sticker",
+      isImage: true,
+      path: "D:/study/.cyberboss/stickers/assets/stk_001.gif",
+      relativePath: "stickers/assets/stk_001.gif",
+      stickerId: "stk_001",
+    })
   }
 })
 
@@ -432,10 +563,10 @@ test("claudecode realtime and import leave composite context text unchanged", (t
   }
 })
 
-function createArchive(stateDir) {
+function createArchive(stateDir, mediaStateDir = stateDir) {
   return new ConversationArchive({
     config: {
-      stateDir,
+      stateDir: mediaStateDir,
       conversationDir: path.join(stateDir, "conversations"),
     },
   })
@@ -453,16 +584,23 @@ function ingestRealtime(archive, runtimeId, sourceFile, records) {
   })
 }
 
-function runBothModes({ rootDir, runtimeId, sourceFile, rawRecords, date }) {
+function runBothModes({
+  rootDir,
+  runtimeId,
+  sourceFile,
+  rawRecords,
+  date,
+  mediaStateDir = "",
+}) {
   const realtimeDir = path.join(rootDir, "realtime")
   const importDir = path.join(rootDir, "import")
-  const realtimeArchive = createArchive(realtimeDir)
+  const realtimeArchive = createArchive(realtimeDir, mediaStateDir || realtimeDir)
   ingestRealtime(realtimeArchive, runtimeId, sourceFile, rawRecords)
   realtimeArchive.close()
 
   const importer = new ConversationImporter({
     config: {
-      stateDir: rootDir,
+      stateDir: mediaStateDir || rootDir,
       conversationDir: path.join(importDir, "conversations"),
     },
     logger: { warn() {} },
