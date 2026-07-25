@@ -166,6 +166,7 @@ function createWebChatChannelAdapter({ config }) {
     const quotedEnvelope = parseQuotedEnvelope(text);
     const quote = quotedEnvelope.quote || "";
     const visibleText = quotedEnvelope.text;
+    const media = partitionMedia(prepared.attachments);
     const turnIdentity = normalizeTurnIdentity({
       requestId: prepared.requestId,
       messageId: prepared.messageId,
@@ -189,9 +190,9 @@ function createWebChatChannelAdapter({ config }) {
         ...(bubbleSegments.length ? { bubbleSegments } : {}),
         sourceKey: `web|message|${normalizeText(prepared.messageId)}`,
         ...(quote ? { quote } : {}),
-        ...(Array.isArray(prepared.attachments) && prepared.attachments.length
-          ? { attachments: prepared.attachments }
-          : {}),
+        attachments: media.attachments,
+        files: media.files,
+        stickers: media.stickers,
         ephemeral: true,
       },
     };
@@ -385,6 +386,15 @@ function createWebChatChannelAdapter({ config }) {
       fileName: path.basename(String(filePath || "")),
       path: filePath,
     };
+    const mediaKind = normalizeText(media.kind).toLowerCase() || inferKindFromFilePath(media.path || filePath);
+    const normalizedMedia = {
+      ...media,
+      kind: mediaKind,
+      isImage: typeof media.isImage === "boolean"
+        ? media.isImage
+        : mediaKind === "image" || mediaKind === "sticker",
+    };
+    const mediaCollections = partitionMedia([normalizedMedia]);
     const stableItemId = normalizeText(itemId) || normalizeText(messageId) || crypto.randomUUID();
     const turnIdentity = normalizeTurnIdentity({
       requestId,
@@ -407,7 +417,9 @@ function createWebChatChannelAdapter({ config }) {
         itemId: stableItemId,
         ...turnIdentity,
         sourceKey: ["web", normalizeText(threadId), normalizeText(turnId), stableItemId, "assistant"].filter(Boolean).join("|"),
-        files: [media],
+        attachments: mediaCollections.attachments,
+        files: mediaCollections.files,
+        stickers: mediaCollections.stickers,
         ephemeral: true,
         source: "webchat",
       },
@@ -549,6 +561,30 @@ function inferKindFromFilePath(filePath) {
   if (/\.(mp3|m4a|wav|ogg|oga|webm|aac|flac)$/.test(value)) return "voice";
   if (/\.(png|jpe?g|gif|webp|bmp|svg)$/.test(value)) return "image";
   return "file";
+}
+
+function partitionMedia(items) {
+  const attachments = [];
+  const files = [];
+  const stickers = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item || typeof item !== "object") continue;
+    const kind = normalizeString(item.kind || item.type).toLowerCase()
+      || inferKindFromFilePath(item.path || item.filePath || item.absolutePath || "");
+    const normalized = {
+      ...item,
+      kind,
+    };
+    if (kind === "file") {
+      files.push(normalized);
+      continue;
+    }
+    attachments.push(normalized);
+    if (kind === "sticker") {
+      stickers.push(normalized);
+    }
+  }
+  return { attachments, files, stickers };
 }
 
 function dateFolder() {

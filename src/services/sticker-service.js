@@ -129,6 +129,14 @@ class StickerService {
     const delivery = await this.channelFileService.sendToCurrentChat({
       filePath,
       userId,
+      file: {
+        kind: "sticker",
+        stickerId: normalizedStickerId,
+        fileName: path.basename(filePath),
+        path: filePath,
+        relativePath: path.relative(this.config.stateDir, filePath).replace(/\\/g, "/"),
+        isImage: true,
+      },
     }, context);
     return {
       stickerId: normalizedStickerId,

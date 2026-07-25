@@ -12,7 +12,7 @@ class ChannelFileService {
     this.sessionStore = sessionStore;
   }
 
-  async sendToCurrentChat({ filePath = "", userId = "" } = {}, context = {}) {
+  async sendToCurrentChat({ filePath = "", userId = "", file = null } = {}, context = {}) {
     const explicitProvider = normalizeChannelProvider(context?.provider);
     const explicitUserId = normalizeText(userId) || normalizeText(context?.senderId);
     const webTarget = explicitProvider === "weixin"
@@ -58,9 +58,11 @@ class ChannelFileService {
       provider: deliveryProvider,
       threadId: context?.threadId,
     }).catch(() => {});
+    const deliveryFile = normalizeDeliveryFile(file, resolvedPath);
     await this.channelAdapter.sendFile({
       userId: targetUserId,
       filePath: resolvedPath,
+      ...(deliveryFile ? { file: deliveryFile } : {}),
       contextToken,
       provider: deliveryProvider,
       threadId: context?.threadId,
@@ -83,6 +85,17 @@ function normalizeText(value) {
 function normalizeChannelProvider(value) {
   const normalized = normalizeText(value).toLowerCase();
   return normalized === "web" || normalized === "weixin" ? normalized : "";
+}
+
+function normalizeDeliveryFile(file, resolvedPath) {
+  if (!file || typeof file !== "object" || Array.isArray(file)) {
+    return null;
+  }
+  return {
+    ...file,
+    path: normalizeText(file.path) || resolvedPath,
+    fileName: normalizeText(file.fileName) || path.basename(resolvedPath),
+  };
 }
 
 module.exports = { ChannelFileService };

@@ -128,6 +128,47 @@ test("sticker service keeps a local tags file unchanged when a template exists",
   assert.deepEqual(JSON.parse(fs.readFileSync(config.stickerTagsFile, "utf8")), ["自定义"]);
 });
 
+test("sticker delivery passes canonical media to the shared channel service", async () => {
+  const config = createConfig();
+  fs.mkdirSync(config.stickerAssetsDir, { recursive: true });
+  writeJson(config.stickersIndexFile, {
+    stk_001: {
+      tags: ["可爱"],
+      desc: "脱敏表情包",
+    },
+  });
+  writeTinyGif(path.join(config.stickerAssetsDir, "stk_001.gif"));
+  const { service, sentFiles } = createService(config);
+
+  await service.sendToCurrentChat({
+    stickerId: "stk_001",
+  }, {
+    provider: "web",
+    senderId: "web-user",
+    threadId: "web-thread",
+  });
+
+  assert.deepEqual(sentFiles[0], {
+    args: {
+      filePath: path.join(config.stickerAssetsDir, "stk_001.gif"),
+      userId: "",
+      file: {
+        kind: "sticker",
+        stickerId: "stk_001",
+        fileName: "stk_001.gif",
+        path: path.join(config.stickerAssetsDir, "stk_001.gif"),
+        relativePath: "stickers/assets/stk_001.gif",
+        isImage: true,
+      },
+    },
+    context: {
+      provider: "web",
+      senderId: "web-user",
+      threadId: "web-thread",
+    },
+  });
+});
+
 test("sticker service exposes the current tag catalog on demand", async () => {
   const config = createConfig();
   const { service } = createService(config);

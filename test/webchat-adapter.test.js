@@ -144,6 +144,43 @@ test("webchat inbound parses a nested quoted envelope", () => {
   }
 });
 
+test("webchat inbound publishes a user file in the canonical file collection", () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-webchat-user-file-"));
+  const adapter = createWebChatChannelAdapter({
+    config: {
+      stateDir,
+      webChatSenderId: "user-file",
+      allowedUserIds: ["user-file"],
+      webChatEnabled: true,
+    },
+  });
+
+  try {
+    const inbound = adapter.publishInbound({
+      prepared: {
+        senderId: "user-file",
+        messageId: "message-user-file",
+        text: "",
+        receivedAt: "2026-07-26T00:00:00.000Z",
+        attachments: [{
+          kind: "file",
+          fileName: "fixture.txt",
+          contentType: "text/plain",
+          path: path.join(stateDir, "inbox", "fixture.txt"),
+        }],
+      },
+      threadId: "thread-user-file",
+      turnId: "turn-user-file",
+    });
+
+    assert.deepEqual(inbound.record.meta.attachments, []);
+    assert.equal(inbound.record.meta.files[0].fileName, "fixture.txt");
+    assert.deepEqual(inbound.record.meta.stickers, []);
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("runtime correlation events expose protocol-v2 turn identities", () => {
   const adapter = createWebChatChannelAdapter({
     config: {
@@ -287,4 +324,60 @@ test("webchat upload returns an inbox media reference", async () => {
   assert.equal(media.contentType, "text/plain");
   assert.ok(media.absolutePath.startsWith(path.join(stateDir, "inbox")));
   assert.equal(fs.readFileSync(media.absolutePath, "utf8"), "hello");
+});
+
+test("webchat file delivery publishes canonical image, file, and sticker media immediately", async () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-webchat-media-"));
+  const adapter = createWebChatChannelAdapter({
+    config: {
+      stateDir,
+      webChatSenderId: "user-media",
+      allowedUserIds: ["user-media"],
+      webChatEnabled: true,
+    },
+  });
+
+  await adapter.sendFile({
+    userId: "user-media",
+    threadId: "thread-media",
+    turnId: "turn-image",
+    itemId: "item-image",
+    filePath: path.join(stateDir, "inbox", "fixture.png"),
+  });
+  await adapter.sendFile({
+    userId: "user-media",
+    threadId: "thread-media",
+    turnId: "turn-file",
+    itemId: "item-file",
+    filePath: path.join(stateDir, "inbox", "fixture.txt"),
+  });
+  await adapter.sendFile({
+    userId: "user-media",
+    threadId: "thread-media",
+    turnId: "turn-sticker",
+    itemId: "item-sticker",
+    file: {
+      kind: "sticker",
+      stickerId: "stk_001",
+      fileName: "stk_001.gif",
+      path: path.join(stateDir, "stickers", "assets", "stk_001.gif"),
+      relativePath: "stickers/assets/stk_001.gif",
+      isImage: true,
+    },
+  });
+
+  const records = adapter.getRecentEvents(0)
+    .filter((event) => event.kind === "message")
+    .map((event) => event.record);
+  const image = records.find((record) => record.itemId === "item-image");
+  const file = records.find((record) => record.itemId === "item-file");
+  const sticker = records.find((record) => record.itemId === "item-sticker");
+
+  assert.equal(image.meta.attachments[0].kind, "image");
+  assert.deepEqual(image.meta.files, []);
+  assert.equal(file.meta.files[0].kind, "file");
+  assert.deepEqual(file.meta.attachments, []);
+  assert.equal(sticker.meta.attachments[0].stickerId, "stk_001");
+  assert.equal(sticker.meta.stickers[0].relativePath, "stickers/assets/stk_001.gif");
+  assert.deepEqual(sticker.meta.files, []);
 });
