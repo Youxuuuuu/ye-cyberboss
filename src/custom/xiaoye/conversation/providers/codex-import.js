@@ -22,6 +22,8 @@ class CodexImportParser {
     this.maxStateEntries = Number(maxStateEntries) > 0 ? Math.floor(Number(maxStateEntries)) : 5000
     this.pendingOperations = new Map()
     this.seenFallbackMessages = new Set()
+    this.pendingAgentMessagesByTurn = new Map()
+    this.seenCanonicalAssistantMessages = new Set()
     this.lastCanonicalUserByTurn = new Map()
   }
 
@@ -71,7 +73,7 @@ class CodexImportParser {
       return []
     }
     if (payloadType === "task_complete") {
-      return []
+      return this.flushPendingAgentMessages(this.currentTurnId)
     }
     if (payloadType === "patch_apply_end") {
       const operationRecord = this.buildOperationRecord({
@@ -94,6 +96,35 @@ class CodexImportParser {
       if (!text) {
         return []
       }
+      if (role === "assistant") {
+        const canonicalKey = buildFallbackMessageKey(role, this.currentTurnId, text)
+        if (this.seenCanonicalAssistantMessages.has(canonicalKey)) {
+          return []
+        }
+        this.rememberPendingAgentMessage(normalizeConversationRecord({
+          type: role,
+          itemId: normalizeText(raw?.payload?.itemId || raw?.payload?.id)
+            || buildFallbackAssistantItemId(this.currentTurnId, sourceLine),
+          timestamp: normalizeTimestamp(raw.timestamp, fallbackTimestamp),
+          runtimeId: "codex",
+          threadId: this.currentThreadId,
+          turnId: this.currentTurnId,
+          workspaceRoot: this.currentWorkspaceRoot,
+          text,
+          meta: {
+            itemId: normalizeText(raw?.payload?.itemId || raw?.payload?.id)
+              || buildFallbackAssistantItemId(this.currentTurnId, sourceLine),
+          },
+          source: {
+            provider: "codex",
+            sourceType: `codex.${payloadType}`,
+            sourceFile,
+            sourceLine,
+            rawId: `${payloadType}:${sourceLine}`,
+          },
+        }))
+        return []
+      }
       const messageKey = buildFallbackMessageKey(role, this.currentTurnId, text)
       if (this.seenFallbackMessages.has(messageKey)) {
         return []
@@ -114,26 +145,6 @@ class CodexImportParser {
         })
         return record ? [record] : []
       }
-      return [normalizeConversationRecord({
-        type: role,
-        itemId: normalizeText(raw?.payload?.itemId || raw?.payload?.id) || (this.currentTurnId ? `item-${this.currentTurnId}` : ""),
-        timestamp: normalizeTimestamp(raw.timestamp, fallbackTimestamp),
-        runtimeId: "codex",
-        threadId: this.currentThreadId,
-        turnId: this.currentTurnId,
-        workspaceRoot: this.currentWorkspaceRoot,
-        text,
-        meta: {
-          itemId: normalizeText(raw?.payload?.itemId || raw?.payload?.id) || (this.currentTurnId ? `item-${this.currentTurnId}` : ""),
-        },
-        source: {
-          provider: "codex",
-          sourceType: `codex.${payloadType}`,
-          sourceFile,
-          sourceLine,
-          rawId: `${payloadType}:${sourceLine}`,
-        },
-      })]
     }
     return []
   }
@@ -156,12 +167,12 @@ class CodexImportParser {
       if (!text || isApprovalReply(text)) {
         return []
       }
-      const messageKey = buildFallbackMessageKey(role, this.currentTurnId, text)
-       if (this.seenFallbackMessages.has(messageKey)) {
-        return []
-      }
-       rememberBoundedSet(this.seenFallbackMessages, messageKey, this.maxStateEntries)
       if (role === "user") {
+        const messageKey = buildFallbackMessageKey(role, this.currentTurnId, text)
+        if (this.seenFallbackMessages.has(messageKey)) {
+          return []
+        }
+        rememberBoundedSet(this.seenFallbackMessages, messageKey, this.maxStateEntries)
         const record = this.buildUserRecord({
           text,
           timestamp,
@@ -176,6 +187,12 @@ class CodexImportParser {
         })
         return record ? [record] : []
       }
+      this.consumePendingAgentMessage(this.currentTurnId, text)
+      rememberBoundedSet(
+        this.seenCanonicalAssistantMessages,
+        buildFallbackMessageKey(role, this.currentTurnId, text),
+        this.maxStateEntries,
+      )
       return [normalizeConversationRecord({
         type: role,
         itemId: normalizeText(payload.itemId || payload.id) || (this.currentTurnId ? `item-${this.currentTurnId}` : ""),
@@ -336,6 +353,36 @@ class CodexImportParser {
     return this.rememberCanonicalUserRecord(record)
   }
 
+  rememberPendingAgentMessage(record) {
+    const turnId = normalizeText(record?.turnId)
+    const pending = this.pendingAgentMessagesByTurn.get(turnId) || []
+    pending.push(record)
+    setBoundedMap(this.pendingAgentMessagesByTurn, turnId, pending, this.maxStateEntries)
+  }
+
+  consumePendingAgentMessage(turnId, text) {
+    const key = normalizeText(turnId)
+    const pending = this.pendingAgentMessagesByTurn.get(key) || []
+    const index = pending.findIndex((record) => normalizeText(record.text) === normalizeText(text))
+    if (index < 0) {
+      return null
+    }
+    const [record] = pending.splice(index, 1)
+    if (pending.length) {
+      this.pendingAgentMessagesByTurn.set(key, pending)
+    } else {
+      this.pendingAgentMessagesByTurn.delete(key)
+    }
+    return record
+  }
+
+  flushPendingAgentMessages(turnId) {
+    const key = normalizeText(turnId)
+    const pending = this.pendingAgentMessagesByTurn.get(key) || []
+    this.pendingAgentMessagesByTurn.delete(key)
+    return pending
+  }
+
   rememberCanonicalUserRecord(record) {
     if (!record || record.type !== "user") {
       return record
@@ -487,4 +534,9 @@ module.exports = {
   CodexImportParser,
   createCodexImportParser,
   extractCodexThreadIdFromSourceFile,
+}
+
+function buildFallbackAssistantItemId(turnId, sourceLine) {
+  const normalizedTurnId = normalizeText(turnId)
+  return normalizedTurnId ? `item-${normalizedTurnId}-${sourceLine}` : `item-line-${sourceLine}`
 }
