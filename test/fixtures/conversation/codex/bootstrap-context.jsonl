@@ -1,0 +1,5 @@
+{"timestamp":"2026-07-25T10:20:00.000Z","type":"session_meta","payload":{"id":"fixture-codex-bootstrap","cwd":"D:/study/cyberboss"}}
+{"timestamp":"2026-07-25T10:20:00.010Z","type":"turn_context","payload":{"turn_id":"fixture-turn-bootstrap","cwd":"D:/study/cyberboss","workspace_roots":["D:/study/cyberboss"]}}
+{"timestamp":"2026-07-25T10:20:00.020Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<recommended_plugins>\nfixture metadata\n</recommended_plugins>\n# AGENTS.md instructions for fixture\n<environment_context>\n<cwd>D:/study/cyberboss</cwd>\n</environment_context>"}]}}
+{"timestamp":"2026-07-25T10:20:01.000Z","type":"turn_context","payload":{"turn_id":"fixture-turn-user-text","cwd":"D:/study/cyberboss","workspace_roots":["D:/study/cyberboss"]}}
+{"timestamp":"2026-07-25T10:20:01.010Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"普通脱敏用户文字，讨论 AGENTS.md 与 <environment_context>。"}]}}

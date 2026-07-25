@@ -1,0 +1,7 @@
+{"timestamp":"2026-07-25T10:00:00.000Z","type":"session_meta","payload":{"id":"fixture-codex-assistant","cwd":"D:/study/cyberboss"}}
+{"timestamp":"2026-07-25T10:00:00.010Z","type":"turn_context","payload":{"turn_id":"fixture-turn-assistant","cwd":"D:/study/cyberboss","workspace_roots":["D:/study/cyberboss"]}}
+{"timestamp":"2026-07-25T10:00:01.000Z","type":"event_msg","payload":{"type":"agent_message","message":"第一段脱敏回复"}}
+{"timestamp":"2026-07-25T10:00:01.010Z","type":"response_item","payload":{"id":"fixture-msg-assistant-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"第一段脱敏回复"}]}}
+{"timestamp":"2026-07-25T10:00:02.000Z","type":"event_msg","payload":{"type":"agent_message","message":"第二段脱敏回复"}}
+{"timestamp":"2026-07-25T10:00:02.010Z","type":"response_item","payload":{"id":"fixture-msg-assistant-2","type":"message","role":"assistant","content":[{"type":"output_text","text":"第二段脱敏回复"}]}}
+{"timestamp":"2026-07-25T10:00:02.020Z","type":"event_msg","payload":{"type":"task_complete"}}

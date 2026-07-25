@@ -1,0 +1,5 @@
+{"timestamp":"2026-07-25T10:30:00.000Z","type":"session_meta","payload":{"id":"fixture-codex-inbound","cwd":"D:/study/cyberboss"}}
+{"timestamp":"2026-07-25T10:30:00.010Z","type":"turn_context","payload":{"turn_id":"fixture-turn-user-image","cwd":"D:/study/cyberboss","workspace_roots":["D:/study/cyberboss"]}}
+{"timestamp":"2026-07-25T10:30:00.020Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Saved attachments:\n- [image] D:/study/cyberboss/inbox/fixture-user.png\nUse the saved local files if they are needed for the request."}]}}
+{"timestamp":"2026-07-25T10:30:01.010Z","type":"turn_context","payload":{"turn_id":"fixture-turn-user-file","cwd":"D:/study/cyberboss","workspace_roots":["D:/study/cyberboss"]}}
+{"timestamp":"2026-07-25T10:30:01.020Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Saved attachments:\n- [file] D:/study/cyberboss/inbox/fixture-user.txt\nUse the saved local files if they are needed for the request."}]}}
