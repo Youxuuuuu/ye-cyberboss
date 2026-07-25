@@ -471,8 +471,18 @@ class CyberbossApp {
   async dispatchPreparedTurn({ bindingKey, workspaceRoot, prepared }) {
     const pendingScopeKey = this.turnGateStore.begin(bindingKey, workspaceRoot);
     const currentThreadId = this.runtimeAdapter.getSessionStore().getThreadIdForWorkspace(bindingKey, workspaceRoot) || "";
+    const runtimeId = this.runtimeAdapter.describe().id;
+    this.runtimeContextStore?.setActiveContext?.({
+      workspaceRoot,
+      runtimeId,
+      threadId: currentThreadId,
+      bindingKey,
+      accountId: prepared.accountId,
+      senderId: prepared.senderId,
+      provider: prepared.provider,
+    });
     this.xiaoye.recordPreparedInbound(prepared, {
-      runtimeId: this.runtimeAdapter.describe().id,
+      runtimeId,
       threadId: currentThreadId,
       workspaceRoot,
     });
@@ -507,7 +517,7 @@ class CyberbossApp {
       });
       this.runtimeContextStore?.setActiveContext?.({
         workspaceRoot,
-        runtimeId: this.runtimeAdapter.describe().id,
+        runtimeId,
         threadId: turn.threadId,
         bindingKey,
         accountId: prepared.accountId,
@@ -519,7 +529,7 @@ class CyberbossApp {
         prepared,
         turn,
         previousThreadId: currentThreadId,
-        runtimeId: this.runtimeAdapter.describe().id,
+        runtimeId,
         workspaceRoot,
       });
       const replyTarget = {

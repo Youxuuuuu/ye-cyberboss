@@ -6,6 +6,7 @@ const test = require("node:test")
 
 const { saveWeixinAccount } = require("../src/adapters/channel/weixin/account-store")
 const { persistContextToken } = require("../src/adapters/channel/weixin/context-token-store")
+const { CyberbossApp } = require("../src/core/app")
 const { ChannelFileService } = require("../src/services/channel-file-service")
 const { StickerService } = require("../src/services/sticker-service")
 const { RuntimeContextStore } = require("../src/tools/runtime-context-store")
@@ -32,6 +33,102 @@ test("runtime tool context persists the inbound channel provider", (t) => {
     restored.resolveActiveContext({ workspaceRoot: WORKSPACE_ROOT }).provider,
     "web",
   )
+})
+
+test("web provider is visible to Codex tools before sendTurn completes", async (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-tool-dispatch-context-"))
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
+  const store = new RuntimeContextStore({
+    filePath: path.join(stateDir, "runtime-context.json"),
+  })
+  store.setActiveContext({
+    workspaceRoot: WORKSPACE_ROOT,
+    runtimeId: "codex",
+    threadId: "thread-previous",
+    senderId: "user-weixin",
+    provider: "weixin",
+  })
+
+  const deliveredContexts = []
+  const toolHost = new ProjectToolHost({
+    runtimeContextStore: store,
+    services: {
+      channelFile: {
+        async sendToCurrentChat(_args, context) {
+          deliveredContexts.push(context)
+          return { filePath: "D:/study/.cyberboss/inbox/fixture.txt" }
+        },
+      },
+    },
+  })
+  const sessionStore = {
+    getThreadIdForWorkspace() {
+      return "thread-web"
+    },
+    getRuntimeParamsForWorkspace() {
+      return { model: "gpt-5.4" }
+    },
+  }
+  const appLike = {
+    runtimeContextStore: store,
+    runtimeAdapter: {
+      describe() {
+        return { id: "codex" }
+      },
+      getSessionStore() {
+        return sessionStore
+      },
+      async sendTurn() {
+        await toolHost.invokeTool("cyberboss_channel_send_file", {
+          filePath: "D:/study/.cyberboss/inbox/fixture.txt",
+        }, {
+          workspaceRoot: WORKSPACE_ROOT,
+          runtimeId: "codex",
+        })
+        return { threadId: "thread-web", turnId: "turn-web" }
+      },
+    },
+    turnGateStore: {
+      begin() {
+        return "binding-web::D:/study/cyberboss"
+      },
+      attachThread() {},
+      releaseScope() {},
+    },
+    xiaoye: {
+      recordPreparedInbound() {},
+      handleRuntimeTurnStarted() {},
+    },
+    channelAdapter: {
+      async sendTyping() {},
+      async sendText() {},
+    },
+    streamDelivery: {
+      bindReplyTargetForTurn() {},
+      queueReplyTargetForThread() {},
+    },
+    async buildRuntimeTurn({ prepared }) {
+      return { text: prepared.text, attachments: [] }
+    },
+  }
+
+  await CyberbossApp.prototype.dispatchPreparedTurn.call(appLike, {
+    bindingKey: "binding-web",
+    workspaceRoot: WORKSPACE_ROOT,
+    prepared: {
+      workspaceId: "default",
+      accountId: "",
+      senderId: "user-web",
+      contextToken: "",
+      provider: "web",
+      text: "send the file",
+    },
+  })
+
+  assert.equal(deliveredContexts.length, 1)
+  assert.equal(deliveredContexts[0].provider, "web")
+  assert.equal(deliveredContexts[0].senderId, "user-web")
+  assert.equal(deliveredContexts[0].threadId, "thread-web")
 })
 
 for (const runtimeId of ["codex", "claudecode"]) {
