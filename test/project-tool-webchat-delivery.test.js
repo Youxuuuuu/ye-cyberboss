@@ -8,6 +8,7 @@ const test = require("node:test")
 const { createWebChatChannelAdapter } = require("../src/custom/xiaoye/murmurlane/webchat")
 const { createWebChatServer } = require("../src/custom/xiaoye/murmurlane/webchat/server")
 const { createXiaoyeProjectTooling } = require("../src/custom/xiaoye")
+const { RuntimeContextStore } = require("../src/tools/runtime-context-store")
 
 test("standalone project tools deliver a WebChat file through the running channel", async (t) => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-project-tool-webchat-"))
@@ -33,8 +34,11 @@ test("standalone project tools deliver a WebChat file through the running channe
   config.webChatPort = webServer.address().port
   const eventsUrl = `http://127.0.0.1:${config.webChatPort}/api/chat/events?threadId=thread-web&after=0`
 
-  const { runtimeContextStore, toolHost } = createXiaoyeProjectTooling(config)
-  runtimeContextStore.setActiveContext({
+  const { toolHost } = createXiaoyeProjectTooling(config)
+  const cyberbossProcessStore = new RuntimeContextStore({
+    filePath: config.projectToolContextFile,
+  })
+  cyberbossProcessStore.setActiveContext({
     workspaceRoot: "D:/study/cyberboss",
     runtimeId: "codex",
     threadId: "thread-web",
@@ -92,8 +96,11 @@ for (const runtimeId of ["codex", "claudecode"]) {
     config.webChatPort = webServer.address().port
     const eventsUrl = `http://127.0.0.1:${config.webChatPort}/api/chat/events?threadId=thread-web&after=0`
 
-    const { runtimeContextStore, toolHost } = createXiaoyeProjectTooling(config)
-    runtimeContextStore.setActiveContext({
+    const { toolHost } = createXiaoyeProjectTooling(config)
+    const cyberbossProcessStore = new RuntimeContextStore({
+      filePath: config.projectToolContextFile,
+    })
+    cyberbossProcessStore.setActiveContext({
       workspaceRoot: "D:/study/cyberboss",
       runtimeId,
       threadId: "thread-web",

@@ -28,7 +28,30 @@ class RuntimeContextStore {
 
   save() {
     this.state = normalizeRuntimeContextState(this.state);
-    fs.writeFileSync(this.filePath, JSON.stringify(this.state, null, 2));
+    const tempPath = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
+    const body = JSON.stringify(this.state, null, 2);
+    try {
+      fs.writeFileSync(tempPath, body, "utf8");
+      fs.renameSync(tempPath, this.filePath);
+    } finally {
+      if (fs.existsSync(tempPath)) {
+        fs.rmSync(tempPath, { force: true });
+      }
+    }
+  }
+
+  refresh() {
+    try {
+      const raw = fs.readFileSync(this.filePath, "utf8");
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || !parsed.contextsByWorkspaceRoot) {
+        return false;
+      }
+      this.state = normalizeRuntimeContextState(parsed);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   setActiveContext({
@@ -63,6 +86,9 @@ class RuntimeContextStore {
   }
 
   resolveActiveContext({ workspaceRoot = "", runtimeId = "" } = {}) {
+    // Project tools run in a separate long-lived MCP process. Refresh the
+    // context written by the Cyberboss process before every tool invocation.
+    this.refresh();
     const normalizedWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot);
     if (normalizedWorkspaceRoot) {
       const exact = this.state.contextsByWorkspaceRoot?.[normalizedWorkspaceRoot];

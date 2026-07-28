@@ -66,15 +66,14 @@ function createXiaoyeModules({ config, cyberbossPort } = {}) {
     recordPreparedInbound(prepared, context = {}) {
       return this.recordInbound(prepared, {
         ...context,
-        turnId: prepared?.provider === "web" ? prepared.logicalTurnId || "" : "",
+        turnId: context.turnId
+          || (prepared?.provider === "web" ? prepared.logicalTurnId || "" : ""),
       })
     },
     handleRuntimeTurnStarted({
       prepared,
       turn,
       previousThreadId = "",
-      runtimeId = "",
-      workspaceRoot = "",
     } = {}) {
       const handled = murmurlane.handleRuntimeTurnStarted({
         prepared,
@@ -84,12 +83,7 @@ function createXiaoyeModules({ config, cyberbossPort } = {}) {
       if (!handled) {
         return null
       }
-      return this.recordInbound(prepared, {
-        runtimeId,
-        threadId: turn.threadId,
-        turnId: turn.turnId || "",
-        workspaceRoot,
-      }, { publish: false })
+      return handled
     },
   }
 }

@@ -251,6 +251,37 @@ class SessionStore {
     return null;
   }
 
+  getRuntimeIdForThreadId(threadId) {
+    const normalizedThreadId = normalizeValue(threadId);
+    if (!normalizedThreadId) {
+      return "";
+    }
+    const runtimeIds = new Set();
+    for (const binding of Object.values(this.state.bindings || {})) {
+      for (const [runtimeId, scopedMap] of Object.entries(getThreadRuntimeMap(binding))) {
+        if (Object.values(scopedMap || {}).some(
+          (candidateThreadId) => normalizeValue(candidateThreadId) === normalizedThreadId
+        )) {
+          runtimeIds.add(normalizeValue(runtimeId));
+        }
+      }
+      if (Object.values(getLegacyThreadMap(binding)).some(
+        (candidateThreadId) => normalizeValue(candidateThreadId) === normalizedThreadId
+      )) {
+        runtimeIds.add("codex");
+      }
+    }
+    const matches = [...runtimeIds].filter(Boolean);
+    if (matches.length > 1) {
+      const error = new Error(
+        `thread runtime ownership is ambiguous for ${normalizedThreadId}: ${matches.join(", ")}`
+      );
+      error.code = "THREAD_RUNTIME_OWNERSHIP_CONFLICT";
+      throw error;
+    }
+    return matches[0] || "";
+  }
+
   getApprovalCommandAllowlistForWorkspace(workspaceRoot) {
     const normalizedWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot);
     if (!normalizedWorkspaceRoot) {

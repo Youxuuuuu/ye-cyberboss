@@ -481,11 +481,6 @@ class CyberbossApp {
       senderId: prepared.senderId,
       provider: prepared.provider,
     });
-    this.xiaoye.recordPreparedInbound(prepared, {
-      runtimeId,
-      threadId: currentThreadId,
-      workspaceRoot,
-    });
     await this.channelAdapter.sendTyping({
       userId: prepared.senderId,
       status: 1,
@@ -530,6 +525,12 @@ class CyberbossApp {
         turn,
         previousThreadId: currentThreadId,
         runtimeId,
+        workspaceRoot,
+      });
+      this.xiaoye.recordPreparedInbound(prepared, {
+        runtimeId,
+        threadId: turn.threadId,
+        turnId: turn.turnId || "",
         workspaceRoot,
       });
       const replyTarget = {

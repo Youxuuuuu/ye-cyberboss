@@ -35,6 +35,53 @@ test("runtime tool context persists the inbound channel provider", (t) => {
   )
 })
 
+test("a long-lived project tool process reloads context written by the Cyberboss process", async (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-tool-shared-context-"))
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
+  const filePath = path.join(stateDir, "runtime-context.json")
+  const cyberbossStore = new RuntimeContextStore({ filePath })
+  cyberbossStore.setActiveContext({
+    workspaceRoot: WORKSPACE_ROOT,
+    runtimeId: "codex",
+    threadId: "thread-weixin",
+    senderId: "user-weixin",
+    provider: "weixin",
+  })
+
+  const toolProcessStore = new RuntimeContextStore({ filePath })
+  const deliveredContexts = []
+  const toolHost = new ProjectToolHost({
+    runtimeContextStore: toolProcessStore,
+    services: {
+      channelFile: {
+        async sendToCurrentChat(_args, context) {
+          deliveredContexts.push(context)
+          return { filePath: "D:/study/.cyberboss/inbox/fixture.txt" }
+        },
+      },
+    },
+  })
+
+  cyberbossStore.setActiveContext({
+    workspaceRoot: WORKSPACE_ROOT,
+    runtimeId: "codex",
+    threadId: "thread-web",
+    senderId: "user-web",
+    provider: "web",
+  })
+  await toolHost.invokeTool("cyberboss_channel_send_file", {
+    filePath: "D:/study/.cyberboss/inbox/fixture.txt",
+  }, {
+    workspaceRoot: WORKSPACE_ROOT,
+    runtimeId: "codex",
+  })
+
+  assert.equal(deliveredContexts.length, 1)
+  assert.equal(deliveredContexts[0].provider, "web")
+  assert.equal(deliveredContexts[0].senderId, "user-web")
+  assert.equal(deliveredContexts[0].threadId, "thread-web")
+})
+
 test("web provider is visible to Codex tools before sendTurn completes", async (t) => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-tool-dispatch-context-"))
   t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
@@ -129,6 +176,156 @@ test("web provider is visible to Codex tools before sendTurn completes", async (
   assert.equal(deliveredContexts[0].provider, "web")
   assert.equal(deliveredContexts[0].senderId, "user-web")
   assert.equal(deliveredContexts[0].threadId, "thread-web")
+})
+
+test("failed runtime submission does not archive a canonical inbound record", async () => {
+  const archived = []
+  const appLike = {
+    runtimeContextStore: {
+      setActiveContext() {},
+    },
+    runtimeAdapter: {
+      describe() {
+        return { id: "codex" }
+      },
+      getSessionStore() {
+        return {
+          getThreadIdForWorkspace() {
+            return "thread-codex"
+          },
+          getRuntimeParamsForWorkspace() {
+            return { model: "gpt-5.4" }
+          },
+        }
+      },
+      async sendTurn() {
+        throw new Error("runtime rejected the turn")
+      },
+    },
+    turnGateStore: {
+      begin() {
+        return "binding-web::D:/study/cyberboss"
+      },
+      releaseScope() {},
+    },
+    xiaoye: {
+      recordPreparedInbound(...args) {
+        archived.push(args)
+      },
+      handleRuntimeTurnStarted() {},
+    },
+    channelAdapter: {
+      async sendTyping() {},
+      async sendText() {},
+    },
+    async buildRuntimeTurn({ prepared }) {
+      return { text: prepared.text, attachments: [] }
+    },
+  }
+
+  const result = await CyberbossApp.prototype.dispatchPreparedTurn.call(appLike, {
+    bindingKey: "binding-web",
+    workspaceRoot: WORKSPACE_ROOT,
+    prepared: {
+      workspaceId: "default",
+      accountId: "",
+      senderId: "user-web",
+      contextToken: "",
+      provider: "web",
+      requestId: "request-failed",
+      messageId: "message-failed",
+      logicalTurnId: "web:request-failed",
+      text: "must not be archived",
+    },
+  })
+
+  assert.equal(result, false)
+  assert.equal(archived.length, 0)
+})
+
+test("successful runtime submission archives only after acceptance with the returned thread identity", async () => {
+  const order = []
+  const archived = []
+  const appLike = {
+    runtimeContextStore: {
+      setActiveContext() {},
+    },
+    runtimeAdapter: {
+      describe() {
+        return { id: "codex" }
+      },
+      getSessionStore() {
+        return {
+          getThreadIdForWorkspace() {
+            return "thread-before"
+          },
+          getRuntimeParamsForWorkspace() {
+            return { model: "gpt-5.4" }
+          },
+        }
+      },
+      async sendTurn() {
+        order.push("runtime-accepted")
+        return { threadId: "thread-after", turnId: "turn-after" }
+      },
+    },
+    turnGateStore: {
+      begin() {
+        return "binding-web::D:/study/cyberboss"
+      },
+      attachThread() {},
+      releaseScope() {},
+    },
+    xiaoye: {
+      handleRuntimeTurnStarted() {
+        order.push("runtime-started")
+      },
+      recordPreparedInbound(_prepared, context) {
+        order.push("canonical-archive")
+        archived.push(context)
+      },
+    },
+    channelAdapter: {
+      async sendTyping() {},
+      async sendText() {},
+    },
+    streamDelivery: {
+      bindReplyTargetForTurn() {},
+      queueReplyTargetForThread() {},
+    },
+    async buildRuntimeTurn({ prepared }) {
+      return { text: prepared.text, attachments: [] }
+    },
+  }
+
+  const result = await CyberbossApp.prototype.dispatchPreparedTurn.call(appLike, {
+    bindingKey: "binding-web",
+    workspaceRoot: WORKSPACE_ROOT,
+    prepared: {
+      workspaceId: "default",
+      accountId: "",
+      senderId: "user-web",
+      contextToken: "",
+      provider: "web",
+      requestId: "request-accepted",
+      messageId: "message-accepted",
+      logicalTurnId: "web:request-accepted",
+      text: "archive only after acceptance",
+    },
+  })
+
+  assert.equal(result.accepted, true)
+  assert.deepEqual(order, [
+    "runtime-accepted",
+    "runtime-started",
+    "canonical-archive",
+  ])
+  assert.deepEqual(archived, [{
+    runtimeId: "codex",
+    threadId: "thread-after",
+    turnId: "turn-after",
+    workspaceRoot: WORKSPACE_ROOT,
+  }])
 })
 
 for (const runtimeId of ["codex", "claudecode"]) {

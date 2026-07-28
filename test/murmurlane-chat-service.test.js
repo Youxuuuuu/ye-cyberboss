@@ -10,6 +10,7 @@ const {
 } = require("../src/core/inbound-turn")
 const { normalizeWorkspaceRoot } = require("../src/core/workspace-root")
 const { isPathWithinRoot } = require("../src/adapters/runtime/shared/approval-command")
+const { SessionStore } = require("../src/adapters/runtime/codex/session-store")
 const { createMurmurLaneChatService } = require("../src/custom/xiaoye/murmurlane/chat-service")
 
 test("murmurlane chat service resolves identity and status through the narrow cyberboss port", () => {
@@ -289,6 +290,91 @@ test("murmurlane chat service keeps a link attachment without local path validat
   })
   assert.equal(harness.pathValidationCalls.length, 0)
 })
+
+for (const [activeRuntimeId, targetRuntimeId] of [
+  ["claudecode", "codex"],
+  ["codex", "claudecode"],
+]) {
+  test(`murmurlane rejects a ${targetRuntimeId} thread while ${activeRuntimeId} is active`, async (t) => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-chat-runtime-owner-"))
+    t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
+    const sessionsFile = path.join(stateDir, "sessions.json")
+    const workspaceRoot = normalizeWorkspaceRoot(stateDir)
+    const bindingKey = "workspace-1:account-1:user-1"
+    const targetThreadId = `thread-${targetRuntimeId}`
+    new SessionStore({ filePath: sessionsFile, runtimeId: targetRuntimeId })
+      .setThreadIdForWorkspace(bindingKey, workspaceRoot, targetThreadId)
+    const sessionStore = new SessionStore({
+      filePath: sessionsFile,
+      runtimeId: activeRuntimeId,
+    })
+    const resumeCalls = []
+    const routeCalls = []
+    const service = createMurmurLaneChatService({
+      config: {
+        stateDir,
+        workspaceId: "workspace-1",
+        workspaceRoot,
+        accountId: "account-1",
+        webChatSenderId: "user-1",
+        webChatEnabled: true,
+      },
+      adapter: {
+        getClientCount() { return 0 },
+        getEventCursor() { return 0 },
+        setActiveTarget() {},
+        publish() {},
+      },
+      cyberbossPort: {
+        resolveWeixinAccount() { return null },
+        getActiveAccountId() { return "account-1" },
+        getRuntimeAdapter() {
+          return {
+            getSessionStore() { return sessionStore },
+            describe() { return { id: activeRuntimeId } },
+            async resumeThread(args) {
+              resumeCalls.push(args)
+              return { threadId: args.threadId }
+            },
+          }
+        },
+        getThreadStateStore() {
+          return {
+            getThreadState() { return null },
+            getLatestContext() { return null },
+          }
+        },
+        resolveWorkspaceRoot() { return workspaceRoot },
+        async routePreparedInbound(payload) {
+          routeCalls.push(payload)
+          return { accepted: true, threadId: targetThreadId, turnId: "wrong-runtime-turn" }
+        },
+        findModelByQuery() { return null },
+        isPathWithinRoot() { return true },
+        buildInboundDraft,
+        buildMergedInboundPrepared,
+        normalizeWorkspaceRoot,
+      },
+    })
+
+    const result = await service.handleWebChatMessages({
+      clientId: "client-runtime-mismatch",
+      threadId: targetThreadId,
+      requestId: `request-${activeRuntimeId}-${targetRuntimeId}`,
+      messageId: `message-${activeRuntimeId}-${targetRuntimeId}`,
+      messages: [{
+        messageId: `message-${activeRuntimeId}-${targetRuntimeId}`,
+        text: "do not send this to the wrong runtime",
+      }],
+    })
+
+    assert.equal(result.accepted, false)
+    assert.equal(result.status, "failed")
+    assert.equal(result.threadId, targetThreadId)
+    assert.equal(resumeCalls.length, 0)
+    assert.equal(routeCalls.length, 0)
+  })
+}
 
 function createAttachmentHarness({ stateDir }) {
   const routeCalls = []

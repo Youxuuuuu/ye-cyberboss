@@ -151,6 +151,11 @@ function createMurmurLaneChatService({ config, adapter, cyberbossPort } = {}) {
     }
     const runtimeAdapter = getRuntimeAdapter()
     const sessionStore = runtimeAdapter.getSessionStore()
+    assertThreadRuntimeCompatible({
+      sessionStore,
+      runtimeAdapter,
+      threadId: normalizedThreadId,
+    })
     const runtimeParams = sessionStore.getRuntimeParamsForWorkspace(context.bindingKey, context.workspaceRoot)
     const resumed = await runtimeAdapter.resumeThread({
       threadId: normalizedThreadId,
@@ -198,6 +203,27 @@ function createMurmurLaneChatService({ config, adapter, cyberbossPort } = {}) {
     const normalizedClientId = normalizeCommandArgument(clientId) || crypto.randomUUID()
     const requestedThreadId = normalizeThreadId(threadId)
     let workspaceRoot = context.workspaceRoot
+
+    const runtimeMismatch = requestedThreadId
+      ? getThreadRuntimeMismatch({
+          sessionStore,
+          runtimeAdapter,
+          threadId: requestedThreadId,
+        })
+      : null
+    if (runtimeMismatch) {
+      return {
+        accepted: false,
+        status: "failed",
+        error: runtimeMismatch.message,
+        errorCode: runtimeMismatch.code,
+        requestId: normalizeCommandArgument(requestId),
+        messageId: normalizeCommandArgument(messageId),
+        logicalTurnId: `web:${normalizeCommandArgument(requestId)}`,
+        threadId: requestedThreadId,
+        turnId: "",
+      }
+    }
 
     if (newThread) {
       await runtimeAdapter.startFreshThreadDraft({ workspaceRoot })
@@ -429,6 +455,43 @@ function requirePortObject(port, methodName) {
     throw new Error(`cyberbossPort.${methodName} must return an object`)
   }
   return value
+}
+
+function assertThreadRuntimeCompatible({ sessionStore, runtimeAdapter, threadId }) {
+  const mismatch = getThreadRuntimeMismatch({ sessionStore, runtimeAdapter, threadId })
+  if (!mismatch) {
+    return
+  }
+  const error = new Error(mismatch.message)
+  error.code = mismatch.code
+  error.statusCode = 409
+  throw error
+}
+
+function getThreadRuntimeMismatch({ sessionStore, runtimeAdapter, threadId }) {
+  const normalizedThreadId = normalizeThreadId(threadId)
+  const activeRuntimeId = normalizeCommandArgument(runtimeAdapter?.describe?.().id)
+  if (!normalizedThreadId || !activeRuntimeId) {
+    return null
+  }
+  let ownerRuntimeId = ""
+  try {
+    ownerRuntimeId = normalizeCommandArgument(
+      sessionStore?.getRuntimeIdForThreadId?.(normalizedThreadId)
+    )
+  } catch (error) {
+    return {
+      code: normalizeCommandArgument(error?.code) || "THREAD_RUNTIME_OWNERSHIP_CONFLICT",
+      message: error instanceof Error ? error.message : String(error),
+    }
+  }
+  if (!ownerRuntimeId || ownerRuntimeId === activeRuntimeId) {
+    return null
+  }
+  return {
+    code: "WEBCHAT_RUNTIME_MISMATCH",
+    message: `thread ${normalizedThreadId} belongs to ${ownerRuntimeId}, but ${activeRuntimeId} is active`,
+  }
 }
 
 function requirePortFunction(port, methodName) {
