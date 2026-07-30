@@ -60,6 +60,52 @@ test("POST /api/chat/messages dispatches the same requestId once", async (t) => 
   assert.equal(dispatchCount, 1)
 })
 
+test("DELETE /api/chat/thread/:threadId delegates the authenticated online delete command", async (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "webchat-server-thread-delete-"))
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
+  const calls = []
+  const server = createWebChatServer({
+    config: {
+      stateDir,
+      webChatEnabled: true,
+      webChatHost: "127.0.0.1",
+      webChatPort: 0,
+      webChatAllowedOrigins: [],
+    },
+    chatService: {
+      getWebChatIdentity() { return null },
+      async deleteWebChatThread(input) {
+        calls.push(input)
+        return {
+          threadId: input.threadId,
+          deletedRecordCount: 3,
+          touchedDates: ["2026-07-31"],
+          deletedSourceKeys: ["source-a", "source-b", "source-c"],
+        }
+      },
+    },
+    adapter: { getClientCount() { return 0 } },
+  })
+  await server.start()
+  t.after(() => server.close())
+  const address = server.address()
+
+  const response = await fetch(
+    `http://127.0.0.1:${address.port}/api/chat/thread/${encodeURIComponent("thread-delete")}`,
+    { method: "DELETE" },
+  )
+
+  assert.equal(response.status, 200)
+  assert.deepEqual(await response.json(), {
+    ok: true,
+    threadId: "thread-delete",
+    deletedRecordCount: 3,
+    touchedDates: ["2026-07-31"],
+    deletedSourceKeys: ["source-a", "source-b", "source-c"],
+  })
+  assert.deepEqual(calls, [{ threadId: "thread-delete" }])
+})
+
 test("POST /api/chat/uploads streams binary bytes and rejects oversized bodies", async (t) => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "webchat-server-upload-"))
   const uploads = []

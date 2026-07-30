@@ -2,12 +2,17 @@ const { createMurmurLaneChatService } = require("./chat-service")
 const { createWebChatChannelAdapter } = require("./webchat")
 const { createWebChatServer } = require("./webchat/server")
 
-function createMurmurLaneModule({ config, cyberbossPort } = {}) {
+function createMurmurLaneModule({
+  config,
+  cyberbossPort,
+  conversationCommands = null,
+} = {}) {
   const adapter = createWebChatChannelAdapter({ config })
   const chatService = createMurmurLaneChatService({
     config,
     adapter,
     cyberbossPort,
+    conversationCommands,
   })
   const server = createWebChatServer({
     config,

@@ -27,6 +27,10 @@ class ConversationWriter {
   }
 
   writeRecords(records = []) {
+    return this.withArchiveLock(() => this.writeRecordsUnlocked(records))
+  }
+
+  writeRecordsUnlocked(records = []) {
     this.ensureDeletionState()
     const normalizedRecords = []
     const warnings = []
@@ -120,6 +124,111 @@ class ConversationWriter {
     }
   }
 
+  deleteThreadRecords({ threadId = "" } = {}) {
+    return this.withArchiveLock(
+      () => this.deleteThreadRecordsUnlocked({ threadId })
+    )
+  }
+
+  deleteThreadRecordsUnlocked({ threadId = "" } = {}) {
+    this.ensureDeletionState()
+    const normalizedThreadId = normalizeText(threadId)
+    if (!normalizedThreadId) {
+      throw new Error("conversation thread delete requires threadId")
+    }
+
+    const touchedDates = []
+    const deletedSourceKeys = []
+    const plans = []
+    let deletedRecordCount = 0
+    const entries = fs.existsSync(this.conversationDir)
+      ? fs.readdirSync(this.conversationDir, { withFileTypes: true })
+      : []
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      if (!entry.isFile() || !/^\d{4}-\d{2}-\d{2}\.jsonl$/u.test(entry.name)) {
+        continue
+      }
+      const date = entry.name.slice(0, -6)
+      const filePath = path.join(this.conversationDir, entry.name)
+      const scan = scanConversationDayForThreadDeletion(
+        filePath,
+        normalizedThreadId
+      )
+      if (!scan.deletedRecordCount) {
+        continue
+      }
+      touchedDates.push(date)
+      deletedRecordCount += scan.deletedRecordCount
+      deletedSourceKeys.push(...scan.deletedSourceKeys)
+      plans.push({
+        date,
+        filePath,
+        originalBody: scan.originalBody,
+        remainingBody: scan.remainingBody,
+        remainingSourceKeys: scan.remainingSourceKeys,
+      })
+    }
+
+    if (!deletedRecordCount) {
+      return {
+        threadId: normalizedThreadId,
+        deletedRecordCount: 0,
+        touchedDates: [],
+        deletedSourceKeys: [],
+      }
+    }
+
+    const previousDeletionState = structuredClone(this.deletionState)
+    const writtenPlans = []
+    try {
+      for (const plan of plans) {
+        writeFileAtomically(plan.filePath, plan.remainingBody)
+        writtenPlans.push(plan)
+        this.deletionState.sourceKeysByDate[plan.date] = plan.remainingSourceKeys
+          .filter((sourceKey) => !this.isIgnoredSourceKey(sourceKey))
+          .sort()
+      }
+      const recoverable = new Set(this.deletionState.recoverableDeletedSourceKeys)
+      deletedSourceKeys.forEach((sourceKey) => recoverable.add(sourceKey))
+      this.deletionState.recoverableDeletedSourceKeys = [...recoverable].sort()
+      this.persistDeletionState()
+    } catch (error) {
+      for (const plan of writtenPlans.reverse()) {
+        writeFileAtomically(plan.filePath, plan.originalBody)
+      }
+      this.deletionState = previousDeletionState
+      this.persistDeletionState()
+      throw error
+    }
+
+    return {
+      threadId: normalizedThreadId,
+      deletedRecordCount,
+      touchedDates,
+      deletedSourceKeys: deletedSourceKeys.sort(),
+    }
+  }
+
+  restoreRecoverableSourceKeys(sourceKeys = []) {
+    this.ensureDeletionState()
+    const requested = new Set(
+      (Array.isArray(sourceKeys) ? sourceKeys : [sourceKeys])
+        .map((sourceKey) => normalizeText(sourceKey))
+        .filter(Boolean)
+    )
+    if (!requested.size) {
+      return 0
+    }
+    const current = this.deletionState.recoverableDeletedSourceKeys
+    const next = current.filter((sourceKey) => !requested.has(sourceKey))
+    const restoredCount = current.length - next.length
+    if (restoredCount) {
+      this.deletionState.recoverableDeletedSourceKeys = next
+      this.persistDeletionState()
+    }
+    return restoredCount
+  }
+
   hasExistingConversationFiles() {
     if (!fs.existsSync(this.conversationDir)) {
       return false
@@ -134,7 +243,13 @@ class ConversationWriter {
 
   isIgnoredSourceKey(sourceKey = "") {
     const normalized = normalizeText(sourceKey)
-    return Boolean(normalized && this.deletionState?.deletedSourceKeys?.includes(normalized))
+    return Boolean(
+      normalized
+      && (
+        this.deletionState?.deletedSourceKeys?.includes(normalized)
+        || this.deletionState?.recoverableDeletedSourceKeys?.includes(normalized)
+      )
+    )
   }
 
   ignoreSourceKeys(sourceKeys = []) {
@@ -182,10 +297,11 @@ class ConversationWriter {
 
     if (!state) {
       state = {
-        version: 1,
+        version: 2,
         updatedAt: new Date().toISOString(),
         sourceKeysByDate: this.scanExistingSourceKeys(),
         deletedSourceKeys: [],
+        recoverableDeletedSourceKeys: [],
       }
       this.deletionState = state
       this.persistDeletionState()
@@ -244,7 +360,7 @@ class ConversationWriter {
       if (!entry.isFile() || !/^\d{4}-\d{2}-\d{2}\.jsonl$/u.test(entry.name)) {
         continue
       }
-      const date = entry.name.slice(0, -5)
+      const date = entry.name.slice(0, -6)
       const filePath = path.join(this.conversationDir, entry.name)
       const records = this.readExistingDayRecords(filePath, [], [])
       sourceKeysByDate[date] = [...new Set(records.map((record) => record.source.sourceKey))].sort()
@@ -334,6 +450,14 @@ class ConversationWriter {
       fs.rmSync(lockPath, { force: true })
     }
   }
+
+  withArchiveLock(callback) {
+    fs.mkdirSync(this.conversationDir, { recursive: true })
+    return this.withFileLock(
+      path.join(this.conversationDir, ".conversation-archive"),
+      callback
+    )
+  }
 }
 
 function writeFileAtomically(filePath, body) {
@@ -354,6 +478,68 @@ function writeFileAtomically(filePath, body) {
       fs.rmSync(tempPath, { force: true })
     }
   }
+}
+
+function scanConversationDayForThreadDeletion(filePath, threadId) {
+  const originalBody = fs.readFileSync(filePath, "utf8")
+  const rawLines = originalBody.split("\n")
+  const remainingLines = []
+  const remainingSourceKeys = []
+  const deletedSourceKeys = []
+  let deletedRecordCount = 0
+
+  for (let index = 0; index < rawLines.length; index += 1) {
+    const rawLine = rawLines[index]
+    const jsonLine = rawLine.endsWith("\r")
+      ? rawLine.slice(0, -1)
+      : rawLine
+    if (!jsonLine.trim()) {
+      remainingLines.push(rawLine)
+      continue
+    }
+
+    let record
+    try {
+      record = JSON.parse(jsonLine)
+    } catch {
+      throw new Error(
+        `conversation thread delete found invalid records in ${filePath} at line ${index + 1}`
+      )
+    }
+
+    const sourceKey = readRawConversationSourceKey(record)
+    if (normalizeText(record?.threadId) === threadId) {
+      deletedRecordCount += 1
+      if (sourceKey) {
+        deletedSourceKeys.push(sourceKey)
+      }
+      continue
+    }
+
+    remainingLines.push(rawLine)
+    if (sourceKey) {
+      remainingSourceKeys.push(sourceKey)
+    }
+  }
+
+  return {
+    originalBody,
+    remainingBody: remainingLines.join("\n"),
+    remainingSourceKeys,
+    deletedRecordCount,
+    deletedSourceKeys,
+  }
+}
+
+function readRawConversationSourceKey(record) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return ""
+  }
+  return normalizeText(
+    record.source?.sourceKey
+    || record.meta?.sourceKey
+    || record.sourceKey
+  )
 }
 
 function isStaleLock(lockPath, ttlMs) {
@@ -381,11 +567,15 @@ function normalizeDeletionState(value) {
   const deletedSourceKeys = Array.isArray(value.deletedSourceKeys)
     ? [...new Set(value.deletedSourceKeys.map((sourceKey) => normalizeText(sourceKey)).filter(Boolean))].sort()
     : []
+  const recoverableDeletedSourceKeys = Array.isArray(value.recoverableDeletedSourceKeys)
+    ? [...new Set(value.recoverableDeletedSourceKeys.map((sourceKey) => normalizeText(sourceKey)).filter(Boolean))].sort()
+    : []
   return {
-    version: 1,
+    version: 2,
     updatedAt: normalizeText(value.updatedAt) || new Date().toISOString(),
     sourceKeysByDate,
     deletedSourceKeys,
+    recoverableDeletedSourceKeys,
   }
 }
 

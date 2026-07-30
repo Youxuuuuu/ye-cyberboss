@@ -10,6 +10,9 @@ function createXiaoyeModules({ config, cyberbossPort } = {}) {
   const murmurlane = createMurmurLaneModule({
     config,
     cyberbossPort: createMurmurLanePort(cyberbossPort),
+    conversationCommands: {
+      deleteThreadRecords: (...args) => conversation.deleteThreadRecords(...args),
+    },
   })
 
   return {

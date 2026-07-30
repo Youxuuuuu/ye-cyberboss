@@ -84,13 +84,27 @@ function createWebChatServer({ config, chatService, adapter }) {
       return;
     }
     if (!authorize(request, url, response, config.webChatToken)) return;
+    if (!isAllowedOrigin(request, config.webChatAllowedOrigins)) {
+      sendJson(response, 403, { error: "origin is not allowed" });
+      return;
+    }
+
+    const deleteThreadMatch = request.method === "DELETE"
+      ? url.pathname.match(/^\/api\/chat\/thread\/([^/]+)$/)
+      : null;
+    if (deleteThreadMatch) {
+      sendJson(response, 200, {
+        ok: true,
+        ...await chatService.deleteWebChatThread({
+          threadId: decodePathSegment(deleteThreadMatch[1], "thread id"),
+        }),
+      });
+      return;
+    }
+
     const identity = chatService.getWebChatIdentity();
     if (!identity?.senderId) {
       sendJson(response, 503, { error: "web chat sender is not configured" });
-      return;
-    }
-    if (!isAllowedOrigin(request, config.webChatAllowedOrigins)) {
-      sendJson(response, 403, { error: "origin is not allowed" });
       return;
     }
 
@@ -323,7 +337,7 @@ function applyCors(request, response, allowedOrigins = []) {
     response.setHeader("Vary", "Origin");
     response.setHeader("Access-Control-Allow-Credentials", "true");
     response.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Cyberboss-Web-Token, X-Cyberboss-File-Name, X-Cyberboss-Media-Kind");
-    response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    response.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
   }
 }
 
@@ -405,6 +419,18 @@ function decodeUploadFileName(value) {
     error.statusCode = 400;
     throw error;
   }
+}
+
+function decodePathSegment(value, label) {
+  try {
+    const decoded = decodeURIComponent(value);
+    if (decoded.trim()) return decoded;
+  } catch {
+    // Fall through to the shared request error below.
+  }
+  const error = new Error(`${label} must be URI encoded non-empty text`);
+  error.statusCode = 400;
+  throw error;
 }
 
 function uploadBodyLimit(config) {

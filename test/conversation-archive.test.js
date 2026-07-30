@@ -901,6 +901,246 @@ test("conversation writer reports actual changes, rejects empty directories, and
   assert.equal(archive.realtimePollTimer, null)
 })
 
+test("conversation writer deletes every archived record for one thread without deleting media or allowing background replay", (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-thread-delete-"))
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
+  const conversationDir = path.join(stateDir, "conversations")
+  const mediaFile = path.join(stateDir, "media", "keep.png")
+  fs.mkdirSync(path.dirname(mediaFile), { recursive: true })
+  fs.writeFileSync(mediaFile, "keep", "utf8")
+  const writer = new ConversationWriter({ conversationDir })
+  const records = [
+    {
+      type: "user",
+      timestamp: "2026-07-29T08:00:00.000Z",
+      runtimeId: "codex",
+      threadId: "thread-delete",
+      turnId: "turn-delete-1",
+      workspaceRoot: WORKSPACE_ROOT,
+      text: "delete first day",
+      source: {
+        provider: "codex",
+        sourceKey: "codex|thread-delete|first",
+        sourceFile: path.join(stateDir, "source.jsonl"),
+        sourceLine: 1,
+      },
+    },
+    {
+      type: "assistant",
+      timestamp: "2026-07-30T08:00:00.000Z",
+      runtimeId: "codex",
+      threadId: "thread-delete",
+      turnId: "turn-delete-2",
+      workspaceRoot: WORKSPACE_ROOT,
+      text: "",
+      meta: {
+        attachments: [{
+          kind: "image",
+          path: mediaFile,
+          absolutePath: mediaFile,
+          fileName: "keep.png",
+        }],
+      },
+      source: {
+        provider: "codex",
+        sourceKey: "codex|thread-delete|second",
+        sourceFile: path.join(stateDir, "source.jsonl"),
+        sourceLine: 2,
+      },
+    },
+    {
+      type: "user",
+      timestamp: "2026-07-30T09:00:00.000Z",
+      runtimeId: "codex",
+      threadId: "thread-keep",
+      turnId: "turn-keep",
+      workspaceRoot: WORKSPACE_ROOT,
+      text: "keep another thread",
+      source: {
+        provider: "codex",
+        sourceKey: "codex|thread-keep|first",
+        sourceFile: path.join(stateDir, "other-source.jsonl"),
+        sourceLine: 1,
+      },
+    },
+  ]
+  assert.equal(writer.writeRecords(records).writtenCount, 3)
+
+  const result = writer.deleteThreadRecords({ threadId: "thread-delete" })
+
+  assert.deepEqual(result, {
+    threadId: "thread-delete",
+    deletedRecordCount: 2,
+    touchedDates: ["2026-07-29", "2026-07-30"],
+    deletedSourceKeys: [
+      "codex|thread-delete|first",
+      "codex|thread-delete|second",
+    ],
+  })
+  assert.deepEqual(readConversationDay(stateDir, "2026-07-29"), [])
+  assert.deepEqual(
+    readConversationDay(stateDir, "2026-07-30").map((record) => record.threadId),
+    ["thread-keep"],
+  )
+  assert.equal(fs.readFileSync(mediaFile, "utf8"), "keep")
+
+  const replay = writer.writeRecords(records.slice(0, 2))
+  assert.equal(replay.writtenCount, 0)
+  assert.equal(replay.ignoredCount, 2)
+  assert.deepEqual(readConversationDay(stateDir, "2026-07-29"), [])
+  assert.deepEqual(
+    readConversationDay(stateDir, "2026-07-30").map((record) => record.threadId),
+    ["thread-keep"],
+  )
+})
+
+test("conversation writer deletes by raw JSON threadId and preserves unrelated legacy records", (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-thread-delete-legacy-"))
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
+  const conversationDir = path.join(stateDir, "conversations")
+  const writer = new ConversationWriter({ conversationDir })
+  const canonicalTarget = {
+    type: "user",
+    timestamp: "2026-07-29T08:00:00.000Z",
+    runtimeId: "codex",
+    threadId: "thread-delete",
+    turnId: "turn-delete",
+    workspaceRoot: WORKSPACE_ROOT,
+    text: "delete canonical",
+    source: {
+      provider: "codex",
+      sourceKey: "codex|thread-delete|canonical",
+      sourceFile: path.join(stateDir, "source.jsonl"),
+      sourceLine: 1,
+    },
+  }
+  assert.equal(writer.writeRecords([canonicalTarget]).writtenCount, 1)
+
+  const legacyKeep = JSON.stringify({
+    id: "legacy-keep",
+    type: "error",
+    timestamp: "2026-05-16T08:00:00.000Z",
+    threadId: "thread-keep",
+    turnId: "turn-keep",
+    workspaceRoot: WORKSPACE_ROOT,
+    text: "keep legacy",
+    meta: {},
+  })
+  const legacyTarget = JSON.stringify({
+    id: "legacy-delete",
+    type: "error",
+    timestamp: "2026-05-16T09:00:00.000Z",
+    threadId: "thread-delete",
+    turnId: "turn-delete-legacy",
+    workspaceRoot: WORKSPACE_ROOT,
+    text: "delete legacy",
+    meta: {},
+  })
+  fs.writeFileSync(
+    path.join(conversationDir, "2026-05-16.jsonl"),
+    `${legacyKeep}\n${legacyTarget}\n`,
+    "utf8",
+  )
+
+  const result = writer.deleteThreadRecords({ threadId: "thread-delete" })
+
+  assert.deepEqual(result, {
+    threadId: "thread-delete",
+    deletedRecordCount: 2,
+    touchedDates: ["2026-05-16", "2026-07-29"],
+    deletedSourceKeys: ["codex|thread-delete|canonical"],
+  })
+  assert.equal(
+    fs.readFileSync(path.join(conversationDir, "2026-05-16.jsonl"), "utf8"),
+    `${legacyKeep}\n`,
+  )
+  assert.deepEqual(readConversationDay(stateDir, "2026-07-29"), [])
+})
+
+test("conversation writer leaves every date unchanged when thread deletion finds an invalid archive file", (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-thread-delete-invalid-"))
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
+  const conversationDir = path.join(stateDir, "conversations")
+  const writer = new ConversationWriter({ conversationDir })
+  const targetRecord = {
+    type: "user",
+    timestamp: "2026-07-29T08:00:00.000Z",
+    runtimeId: "codex",
+    threadId: "thread-delete",
+    turnId: "turn-delete",
+    workspaceRoot: WORKSPACE_ROOT,
+    text: "must remain",
+    source: {
+      provider: "codex",
+      sourceKey: "codex|thread-delete|must-remain",
+      sourceFile: path.join(stateDir, "source.jsonl"),
+      sourceLine: 1,
+    },
+  }
+  assert.equal(writer.writeRecords([targetRecord]).writtenCount, 1)
+  fs.writeFileSync(
+    path.join(conversationDir, "2026-07-30.jsonl"),
+    "{\"invalid\":\n",
+    "utf8",
+  )
+
+  assert.throws(
+    () => writer.deleteThreadRecords({ threadId: "thread-delete" }),
+    /conversation thread delete found invalid records/,
+  )
+
+  assert.deepEqual(
+    readConversationDay(stateDir, "2026-07-29").map((record) => record.text),
+    ["must remain"],
+  )
+})
+
+test("explicit conversation import restores records removed by thread archive deletion", (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-thread-restore-"))
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
+  const conversationDir = path.join(stateDir, "conversations")
+  const threadId = "11111111-1111-4111-8111-111111111111"
+  const sourceFile = path.join(
+    stateDir,
+    `rollout-2026-07-29T08-00-00-${threadId}.jsonl`,
+  )
+  fs.writeFileSync(
+    sourceFile,
+    [
+      sessionMeta(threadId, "2026-07-29T08:00:00.000Z"),
+      turnContext("turn-restore", "2026-07-29T08:00:00.100Z"),
+      responseUser("restore user", "2026-07-29T08:00:00.200Z"),
+      responseAssistant("restore assistant", "2026-07-29T08:00:00.300Z"),
+    ].map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+    "utf8",
+  )
+  const writer = new ConversationWriter({ conversationDir })
+  const importer = new ConversationImporter({
+    config: { conversationDir, stateDir },
+    writer,
+  })
+  const firstImport = importer.importFile({
+    runtimeId: "codex",
+    sourceFile,
+    workspaceRoot: WORKSPACE_ROOT,
+  })
+  assert.equal(firstImport.writtenCount, 2)
+  assert.equal(writer.deleteThreadRecords({ threadId }).deletedRecordCount, 2)
+  assert.deepEqual(readConversationDay(stateDir, "2026-07-29"), [])
+
+  const restored = importer.importFile({
+    runtimeId: "codex",
+    sourceFile,
+    workspaceRoot: WORKSPACE_ROOT,
+  })
+
+  assert.equal(restored.writtenCount, 2)
+  assert.deepEqual(
+    readConversationDay(stateDir, "2026-07-29").map((record) => record.text),
+    ["restore user", "restore assistant"],
+  )
+})
+
 test("conversation writer orders equal timestamps by source file, line, order, then insertion", (t) => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-order-"))
   t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))

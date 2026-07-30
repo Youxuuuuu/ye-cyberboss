@@ -12,7 +12,10 @@ const { ensureStickerCatalogFilesSync } = require("./services/sticker-service");
 const { runToolMcpServer } = require("./tools/mcp-stdio-server");
 const { normalizeWorkspaceRoot } = require("./core/workspace-root");
 const { createXiaoyeProjectTooling } = require("./custom/xiaoye");
-const { ConversationImporter } = require("./custom/xiaoye/conversation");
+const {
+  ConversationImporter,
+  ConversationWriter,
+} = require("./custom/xiaoye/conversation");
 
 function ensureDefaultStateDirectory() {
   fs.mkdirSync(path.join(os.homedir(), ".cyberboss"), { recursive: true });
@@ -100,8 +103,17 @@ async function main() {
   installRuntimeErrorHooks();
   const argv = process.argv.slice(2);
   const config = readConfig();
-  ensureBootstrapFiles(config);
   const command = config.mode || "help";
+
+  if (command === "conversation:delete") {
+    runConversationDeleteCommand({
+      args: argv.slice(1),
+      config,
+    });
+    return;
+  }
+
+  ensureBootstrapFiles(config);
   let app = null;
   const getApp = () => {
     if (!app) {
@@ -206,6 +218,45 @@ async function runConversationImportCommand({ args = [], config = {} } = {}) {
   console.log(`importedCount: ${result.importedCount}`);
   console.log(`writtenCount: ${result.writtenCount}`);
   console.log(`warnings: ${result.warnings.length}`);
+}
+
+function runConversationDeleteCommand({ args = [], config = {} } = {}) {
+  const threadId = readFlagValue(args, "--thread-id")
+    || readFlagValue(args, "--thread");
+  if (!threadId) {
+    throw new Error("conversation:delete requires --thread-id <id>");
+  }
+  const requestedConversationDir = readFlagValue(
+    args,
+    "--conversation-dir"
+  );
+  const conversationDir = requestedConversationDir
+    || config.conversationDir;
+  if (!conversationDir) {
+    throw new Error("conversation:delete could not resolve conversationDir");
+  }
+  const writer = new ConversationWriter({
+    conversationDir,
+    deletionStateFile: readFlagValue(args, "--deletion-state-file")
+      || (requestedConversationDir
+        ? path.join(
+          path.resolve(conversationDir),
+          ".conversation-deletion-state.json"
+        )
+        : config.conversationDeletionStateFile)
+      || path.join(path.resolve(conversationDir), ".conversation-deletion-state.json"),
+    logger: console,
+  });
+  const result = writer.deleteThreadRecords({ threadId });
+  if (args.includes("--json")) {
+    console.log(JSON.stringify({ ok: true, ...result }));
+    return result;
+  }
+  console.log("[cyberboss] conversation delete complete");
+  console.log(`threadId: ${result.threadId}`);
+  console.log(`deletedRecordCount: ${result.deletedRecordCount}`);
+  console.log(`touchedDates: ${result.touchedDates.length}`);
+  return result;
 }
 
 function readFlagValue(args, flag) {

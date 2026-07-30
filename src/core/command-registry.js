@@ -60,6 +60,13 @@ const COMMAND_GROUPS = [
         status: "active",
       },
       {
+        action: "conversation.delete",
+        summary: "Delete one thread from the derived Conversation Archive",
+        terminal: ["conversation:delete --thread-id <id>"],
+        weixin: [],
+        status: "active",
+      },
+      {
         action: "system.send",
         summary: "Write an invisible trigger message into the internal system queue",
         terminal: [],
@@ -375,6 +382,7 @@ function toTerminalCommandExample(commandText) {
     case "shared status":
       return `npm run ${normalized.replace(" ", ":")}`;
     case "conversation:import --runtime <codex|claudecode> --source-file <path>":
+    case "conversation:delete --thread-id <id>":
       return `cyberboss ${normalized}`;
     case "start --checkin":
       return "cyberboss start --checkin";

@@ -3,7 +3,12 @@ const path = require("path")
 
 const { normalizeWebChatSendContract } = require("./webchat/contract")
 
-function createMurmurLaneChatService({ config, adapter, cyberbossPort } = {}) {
+function createMurmurLaneChatService({
+  config,
+  adapter,
+  cyberbossPort,
+  conversationCommands = null,
+} = {}) {
   if (!cyberbossPort || typeof cyberbossPort !== "object") {
     throw new Error("murmurlane chat service requires cyberbossPort")
   }
@@ -184,6 +189,28 @@ function createMurmurLaneChatService({ config, adapter, cyberbossPort } = {}) {
     return getWebChatStatus({ senderId: context.senderId, threadId: selectedThreadId })
   }
 
+  async function deleteWebChatThread({ threadId = "" } = {}) {
+    const normalizedThreadId = normalizeThreadId(threadId)
+    if (!normalizedThreadId) {
+      const error = new Error("threadId is required")
+      error.statusCode = 400
+      throw error
+    }
+    const threadState = getThreadStateStore().getThreadState(normalizedThreadId)
+    if (hasActiveThreadWork(threadState)) {
+      const error = new Error(
+        `thread ${normalizedThreadId} has active work and cannot be deleted`
+      )
+      error.code = "THREAD_DELETE_BUSY"
+      error.statusCode = 409
+      throw error
+    }
+    if (typeof conversationCommands?.deleteThreadRecords !== "function") {
+      throw new Error("conversationCommands.deleteThreadRecords is required")
+    }
+    return conversationCommands.deleteThreadRecords({ threadId: normalizedThreadId })
+  }
+
   async function handleWebChatMessages({
     senderId = "",
     clientId = "",
@@ -325,6 +352,7 @@ function createMurmurLaneChatService({ config, adapter, cyberbossPort } = {}) {
     getWebChatModels,
     setWebChatModel,
     selectWebChatThread,
+    deleteWebChatThread,
     handleWebChatMessages,
   }
 }
@@ -512,6 +540,17 @@ function normalizeThreadId(value) {
     return ""
   }
   return normalized.replace(/\s+/g, "")
+}
+
+function hasActiveThreadWork(threadState) {
+  if (!threadState || typeof threadState !== "object") {
+    return false
+  }
+  if (threadState.pendingApproval) {
+    return true
+  }
+  const status = normalizeCommandArgument(threadState.status).toLowerCase()
+  return !["", "idle", "failed", "completed", "cancelled"].includes(status)
 }
 
 function normalizeText(value) {

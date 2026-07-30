@@ -51,10 +51,14 @@ class ConversationImporter {
       }
     }
 
+    const restoredCount = this.writer.restoreRecoverableSourceKeys(
+      records.map((record) => record?.source?.sourceKey || record?.sourceKey)
+    )
     const writeResult = this.writer.writeRecords(records)
     return {
       importedCount: records.length,
       writtenCount: writeResult.writtenCount,
+      restoredCount,
       warnings: [...warnings, ...writeResult.warnings],
     }
   }

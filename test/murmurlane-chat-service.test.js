@@ -99,6 +99,45 @@ test("murmurlane chat service resolves identity and status through the narrow cy
   }])
 })
 
+test("murmurlane chat service delegates deletion of an idle thread to conversation commands", async () => {
+  const harness = createThreadDeleteHarness({ threadState: { status: "idle" } })
+
+  const result = await harness.service.deleteWebChatThread({
+    senderId: "user-1",
+    threadId: "thread-delete",
+  })
+
+  assert.deepEqual(harness.deleteCalls, [{ threadId: "thread-delete" }])
+  assert.deepEqual(result, {
+    threadId: "thread-delete",
+    deletedRecordCount: 2,
+    touchedDates: ["2026-07-30"],
+    deletedSourceKeys: ["codex|file|1"],
+  })
+})
+
+test("murmurlane chat service rejects deletion while the thread has active work", async () => {
+  const harness = createThreadDeleteHarness({
+    threadState: {
+      status: "waiting_approval",
+      pendingApproval: { requestId: "approval-1" },
+    },
+  })
+
+  await assert.rejects(
+    () => harness.service.deleteWebChatThread({
+      senderId: "user-1",
+      threadId: "thread-delete",
+    }),
+    (error) => (
+      error?.statusCode === 409
+      && error?.code === "THREAD_DELETE_BUSY"
+      && error?.message === "thread thread-delete has active work and cannot be deleted"
+    ),
+  )
+  assert.deepEqual(harness.deleteCalls, [])
+})
+
 test("murmurlane chat service sends an image attachment inside the state directory", async (t) => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-chat-image-"))
   t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
@@ -429,6 +468,64 @@ function createAttachmentHarness({ stateDir }) {
     },
   })
   return { service, routeCalls, pathValidationCalls }
+}
+
+function createThreadDeleteHarness({ threadState = null } = {}) {
+  const deleteCalls = []
+  const service = createMurmurLaneChatService({
+    config: {
+      workspaceId: "workspace-1",
+      workspaceRoot: "D:\\study\\cyberboss",
+      accountId: "account-1",
+      webChatSenderId: "user-1",
+      webChatEnabled: true,
+    },
+    adapter: {
+      getClientCount() { return 0 },
+      getEventCursor() { return 0 },
+    },
+    cyberbossPort: {
+      resolveWeixinAccount() { return null },
+      getActiveAccountId() { return "account-1" },
+      getRuntimeAdapter() {
+        return {
+          getSessionStore() {
+            return {
+              buildBindingKey() { return "workspace-1:account-1:user-1" },
+              getThreadIdForWorkspace() { return "" },
+              getRuntimeParamsForWorkspace() { return {} },
+            }
+          },
+          describe() { return { id: "codex" } },
+        }
+      },
+      getThreadStateStore() {
+        return {
+          getThreadState() { return threadState },
+          getLatestContext() { return null },
+        }
+      },
+      resolveWorkspaceRoot() { return "D:/study/cyberboss" },
+      async routePreparedInbound() { return { accepted: true } },
+      findModelByQuery() { return null },
+      isPathWithinRoot() { return true },
+      buildInboundDraft(value) { return value },
+      buildMergedInboundPrepared(value) { return value },
+      normalizeWorkspaceRoot(value) { return String(value || "").replace(/\\/g, "/") },
+    },
+    conversationCommands: {
+      async deleteThreadRecords(input) {
+        deleteCalls.push(input)
+        return {
+          threadId: input.threadId,
+          deletedRecordCount: 2,
+          touchedDates: ["2026-07-30"],
+          deletedSourceKeys: ["codex|file|1"],
+        }
+      },
+    },
+  })
+  return { service, deleteCalls }
 }
 
 function pickAttachmentFields(attachment) {

@@ -121,6 +121,10 @@ class ConversationArchive {
     this.close()
   }
 
+  deleteThreadRecords({ threadId = "" } = {}) {
+    return this.writer.deleteThreadRecords({ threadId })
+  }
+
   resetParserStateForSource(sourceFile) {
     const normalizedSourceFile = normalizeSourceFile(sourceFile)
     this.hydratedRealtimeSources.delete(normalizedSourceFile)
