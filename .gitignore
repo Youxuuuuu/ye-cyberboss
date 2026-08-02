@@ -12,6 +12,8 @@ examples/mcp/
 docs/*
 !docs/agents/
 !docs/agents/**
+!docs/adr/
+!docs/adr/**
 !docs/xiaoye-refactor-baseline.md
 !docs/architecture/
 docs/architecture/*

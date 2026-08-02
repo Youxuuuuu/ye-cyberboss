@@ -42,7 +42,7 @@ test("murmurlane chat service resolves identity and status through the narrow cy
         return 73
       },
     },
-    cyberbossPort: {
+    cyberbossPort: withRequiredCyberbossPort({
       resolveWeixinAccount() {
         return { accountId: "account-1", userId: "user-1" }
       },
@@ -78,12 +78,11 @@ test("murmurlane chat service resolves identity and status through the narrow cy
       async routePreparedInbound() {
         return { accepted: true }
       },
-      findModelByQuery() { return null },
       isPathWithinRoot() { return true },
       buildInboundDraft(value) { return value },
       buildMergedInboundPrepared(value) { return value },
       normalizeWorkspaceRoot(value) { return String(value || "").replace(/\\/g, "/") },
-    },
+    }),
   })
 
   assert.deepEqual(service.getWebChatIdentity(), {
@@ -116,6 +115,19 @@ test("murmurlane chat service resolves identity and status through the narrow cy
     senderId: "user-1",
     threadId: "thread-1",
   }])
+})
+
+test("murmurlane chat service rejects an incomplete runtime settings port at creation", () => {
+  const cyberbossPort = withRequiredCyberbossPort({
+    getRuntimeAdapter() { return {} },
+    getThreadStateStore() { return {} },
+  })
+  delete cyberbossPort.updateRuntimeSettings
+
+  assert.throws(
+    () => createMurmurLaneChatService({ config: {}, adapter: {}, cyberbossPort }),
+    { message: "cyberbossPort.updateRuntimeSettings is required" },
+  )
 })
 
 test("murmurlane chat service delegates deletion of an idle thread to conversation commands", async () => {
@@ -420,7 +432,7 @@ for (const [activeRuntimeId, targetRuntimeId] of [
         setActiveTarget() {},
         publish() {},
       },
-      cyberbossPort: {
+      cyberbossPort: withRequiredCyberbossPort({
         resolveWeixinAccount() { return null },
         getActiveAccountId() { return "account-1" },
         getRuntimeAdapter() {
@@ -444,12 +456,11 @@ for (const [activeRuntimeId, targetRuntimeId] of [
           routeCalls.push(payload)
           return { accepted: true, threadId: targetThreadId, turnId: "wrong-runtime-turn" }
         },
-        findModelByQuery() { return null },
         isPathWithinRoot() { return true },
         buildInboundDraft,
         buildMergedInboundPrepared,
         normalizeWorkspaceRoot,
-      },
+      }),
     })
 
     const result = await service.handleWebChatMessages({
@@ -495,7 +506,7 @@ function createAttachmentHarness({ stateDir }) {
       getEventCursor() { return 0 },
       setActiveTarget() {},
     },
-    cyberbossPort: {
+    cyberbossPort: withRequiredCyberbossPort({
       resolveWeixinAccount() { return null },
       getActiveAccountId() { return "account-1" },
       getRuntimeAdapter() {
@@ -539,7 +550,6 @@ function createAttachmentHarness({ stateDir }) {
         routeCalls.push(payload)
         return { accepted: true, threadId: "thread-1", turnId: "turn-1" }
       },
-      findModelByQuery() { return null },
       isPathWithinRoot(candidate, root) {
         pathValidationCalls.push({ candidate, root })
         return isPathWithinRoot(candidate, root)
@@ -547,7 +557,7 @@ function createAttachmentHarness({ stateDir }) {
       buildInboundDraft,
       buildMergedInboundPrepared,
       normalizeWorkspaceRoot,
-    },
+    }),
   })
   return {
     service,
@@ -573,7 +583,7 @@ function createThreadDeleteHarness({ threadState = null } = {}) {
       getClientCount() { return 0 },
       getEventCursor() { return 0 },
     },
-    cyberbossPort: {
+    cyberbossPort: withRequiredCyberbossPort({
       resolveWeixinAccount() { return null },
       getActiveAccountId() { return "account-1" },
       getRuntimeAdapter() {
@@ -600,12 +610,11 @@ function createThreadDeleteHarness({ threadState = null } = {}) {
       },
       resolveWorkspaceRoot() { return "D:/study/cyberboss" },
       async routePreparedInbound() { return { accepted: true } },
-      findModelByQuery() { return null },
       isPathWithinRoot() { return true },
       buildInboundDraft(value) { return value },
       buildMergedInboundPrepared(value) { return value },
       normalizeWorkspaceRoot(value) { return String(value || "").replace(/\\/g, "/") },
-    },
+    }),
     conversationCommands: {
       async deleteThreadRecords(input) {
         deleteCalls.push(input)
@@ -627,5 +636,15 @@ function pickAttachmentFields(attachment) {
     fileName: attachment.fileName,
     contentType: attachment.contentType,
     relativePath: attachment.relativePath,
+  }
+}
+
+function withRequiredCyberbossPort(overrides = {}) {
+  return {
+    getThreadUsageTotals() { return null },
+    deleteThreadUsage() { return false },
+    async getRuntimeSettings() { return {} },
+    async updateRuntimeSettings() { return {} },
+    ...overrides,
   }
 }

@@ -106,18 +106,36 @@ function createXiaoyeProjectTooling(config, options = {}) {
 }
 
 function createMurmurLanePort(cyberbossPort) {
+  const requiredMethods = [
+    "getRuntimeAdapter",
+    "getThreadStateStore",
+    "getThreadUsageTotals",
+    "deleteThreadUsage",
+    "getRuntimeSettings",
+    "updateRuntimeSettings",
+    "resolveWorkspaceRoot",
+    "routePreparedInbound",
+    "isPathWithinRoot",
+    "buildInboundDraft",
+    "buildMergedInboundPrepared",
+    "normalizeWorkspaceRoot",
+  ]
+  for (const methodName of requiredMethods) {
+    if (typeof cyberbossPort?.[methodName] !== "function") {
+      throw new Error(`xiaoye cyberbossPort.${methodName} is required`)
+    }
+  }
   return {
     resolveWeixinAccount: (...args) => cyberbossPort.resolveWeixinAccount(...args),
     getActiveAccountId: (...args) => cyberbossPort.getActiveAccountId(...args),
     getRuntimeAdapter: (...args) => cyberbossPort.getRuntimeAdapter(...args),
     getThreadStateStore: (...args) => cyberbossPort.getThreadStateStore(...args),
-    getThreadUsageTotals: (...args) => cyberbossPort.getThreadUsageTotals?.(...args) || null,
-    deleteThreadUsage: (...args) => cyberbossPort.deleteThreadUsage?.(...args) || false,
-    getRuntimeSettings: (...args) => cyberbossPort.getRuntimeSettings?.(...args),
-    updateRuntimeSettings: (...args) => cyberbossPort.updateRuntimeSettings?.(...args),
+    getThreadUsageTotals: (...args) => cyberbossPort.getThreadUsageTotals(...args),
+    deleteThreadUsage: (...args) => cyberbossPort.deleteThreadUsage(...args),
+    getRuntimeSettings: (...args) => cyberbossPort.getRuntimeSettings(...args),
+    updateRuntimeSettings: (...args) => cyberbossPort.updateRuntimeSettings(...args),
     resolveWorkspaceRoot: (...args) => cyberbossPort.resolveWorkspaceRoot(...args),
     routePreparedInbound: (...args) => cyberbossPort.routePreparedInbound(...args),
-    findModelByQuery: (...args) => cyberbossPort.findModelByQuery(...args),
     isPathWithinRoot: (...args) => cyberbossPort.isPathWithinRoot(...args),
     buildInboundDraft: (...args) => cyberbossPort.buildInboundDraft(...args),
     buildMergedInboundPrepared: (...args) => cyberbossPort.buildMergedInboundPrepared(...args),

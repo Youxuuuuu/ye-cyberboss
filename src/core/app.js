@@ -8,7 +8,6 @@ const { DEFAULT_MIN_WEIXIN_CHUNK, MAX_MIN_WEIXIN_CHUNK } = require("../adapters/
 const { persistIncomingWeixinAttachments } = require("../adapters/channel/weixin/media-receive");
 const { createCodexRuntimeAdapter } = require("../adapters/runtime/codex");
 const { createClaudeCodeRuntimeAdapter } = require("../adapters/runtime/claudecode");
-const { findModelByQuery } = require("../adapters/runtime/shared/model-catalog");
 const { createTimelineIntegration } = require("../integrations/timeline");
 const {
   assembleRuntimeTurnText,
@@ -155,7 +154,6 @@ class CyberbossApp {
       updateRuntimeSettings: (args) => this.runtimeSettingsService.updateWorkspaceSettings(args),
       resolveWorkspaceRoot: (...args) => this.resolveWorkspaceRoot(...args),
       routePreparedInbound: (...args) => this.routePreparedInbound(...args),
-      findModelByQuery,
       isPathWithinRoot,
       buildInboundDraft,
       buildMergedInboundPrepared,

@@ -30,6 +30,27 @@ test("xiaoye composition root exposes conversation and murmurlane lifecycle", as
   await modules.close()
 })
 
+test("xiaoye composition root rejects a missing required murmurlane port", (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-xiaoye-port-"))
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
+  const cyberbossPort = createFakeCyberbossPort()
+  delete cyberbossPort.getRuntimeSettings
+
+  assert.throws(
+    () => createXiaoyeModules({
+      config: {
+        stateDir,
+        conversationDir: path.join(stateDir, "conversations"),
+        webChatEnabled: false,
+        webChatHost: "127.0.0.1",
+        webChatPort: 0,
+      },
+      cyberbossPort,
+    }),
+    { message: "xiaoye cyberbossPort.getRuntimeSettings is required" },
+  )
+})
+
 test("xiaoye composition root routes web thread deletion to its conversation archive", async (t) => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-xiaoye-delete-"))
   t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
@@ -116,9 +137,12 @@ function createFakeCyberbossPort() {
     getActiveAccountId() { return "" },
     getRuntimeAdapter() { return {} },
     getThreadStateStore() { return {} },
+    getThreadUsageTotals() { return null },
+    deleteThreadUsage() { return false },
+    async getRuntimeSettings() { return {} },
+    async updateRuntimeSettings() { return {} },
     resolveWorkspaceRoot() { return "" },
     async routePreparedInbound() { return null },
-    findModelByQuery() { return null },
     isPathWithinRoot() { return true },
     buildInboundDraft(value) { return value },
     buildMergedInboundPrepared(value) { return value },

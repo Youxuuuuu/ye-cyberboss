@@ -55,3 +55,19 @@ _Avoid_: MurmurLane、Conversation Archive
 **State Directory**:
 保存 Cyberboss 运行状态、Conversation Archive、媒体和其他持久数据的根目录。
 _Avoid_: 源码仓库、临时构建目录
+
+**Runtime Settings**:
+由 Cyberboss 按 Runtime 与 Workspace 管理、决定后续 Turn 使用的模型、模型 Provider 与 Effort 设置。
+_Avoid_: Thread 私有偏好、MurmurLane 本地状态、页面选择器状态
+
+**Runtime Model Catalog**:
+Runtime Adapter 从真实 Runtime 获取并由 Cyberboss 保存最近有效结果的模型与能力目录。
+_Avoid_: 前端硬编码模型、MurmurLane Provider 数据库
+
+**Runtime Context Snapshot**:
+Runtime 最近一次报告的上下文用量事实，用于表达当前 Context 状态。
+_Avoid_: Thread 累计 Usage、Conversation Record 计数
+
+**Thread Usage Totals**:
+Cyberboss 根据 Runtime 权威 Usage Observation 为单个 Thread 幂等累计并持久化的真实用量。
+_Avoid_: Runtime Context Snapshot、页面会话计数、根据文本估算的 Token

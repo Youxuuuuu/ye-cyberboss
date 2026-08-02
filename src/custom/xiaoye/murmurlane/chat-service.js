@@ -12,18 +12,25 @@ function createMurmurLaneChatService({
   if (!cyberbossPort || typeof cyberbossPort !== "object") {
     throw new Error("murmurlane chat service requires cyberbossPort")
   }
-  const findModelByQuery = requirePortFunction(cyberbossPort, "findModelByQuery")
+  const getRuntimeAdapterFromPort = requirePortFunction(cyberbossPort, "getRuntimeAdapter")
+  const getThreadStateStoreFromPort = requirePortFunction(cyberbossPort, "getThreadStateStore")
+  const getThreadUsageTotals = requirePortFunction(cyberbossPort, "getThreadUsageTotals")
+  const deleteThreadUsage = requirePortFunction(cyberbossPort, "deleteThreadUsage")
+  const getRuntimeSettings = requirePortFunction(cyberbossPort, "getRuntimeSettings")
+  const updateRuntimeSettings = requirePortFunction(cyberbossPort, "updateRuntimeSettings")
+  const resolveWorkspaceRoot = requirePortFunction(cyberbossPort, "resolveWorkspaceRoot")
+  const routePreparedInbound = requirePortFunction(cyberbossPort, "routePreparedInbound")
   const isPathWithinRoot = requirePortFunction(cyberbossPort, "isPathWithinRoot")
   const buildInboundDraft = requirePortFunction(cyberbossPort, "buildInboundDraft")
   const buildMergedInboundPrepared = requirePortFunction(cyberbossPort, "buildMergedInboundPrepared")
   const normalizeWorkspaceRoot = requirePortFunction(cyberbossPort, "normalizeWorkspaceRoot")
 
   function getRuntimeAdapter() {
-    return requirePortObject(cyberbossPort, "getRuntimeAdapter")
+    return requirePortObjectResult(getRuntimeAdapterFromPort(), "getRuntimeAdapter")
   }
 
   function getThreadStateStore() {
-    return requirePortObject(cyberbossPort, "getThreadStateStore")
+    return requirePortObjectResult(getThreadStateStoreFromPort(), "getThreadStateStore")
   }
 
   function getWebChatIdentity() {
@@ -65,7 +72,7 @@ function createMurmurLaneChatService({
       senderId: normalizedSenderId,
       accountId,
       bindingKey,
-      workspaceRoot: cyberbossPort.resolveWorkspaceRoot(bindingKey),
+      workspaceRoot: resolveWorkspaceRoot(bindingKey),
     }
   }
 
@@ -82,7 +89,7 @@ function createMurmurLaneChatService({
     const contextUsage = threadState?.context
       || (!selectedThreadId ? threadStateStore.getLatestContext(runtimeAdapter.describe().id) : null)
     const usageTotals = selectedThreadId
-      ? cyberbossPort.getThreadUsageTotals?.(selectedThreadId) || null
+      ? getThreadUsageTotals(selectedThreadId) || null
       : null
     return {
       connected: config.webChatEnabled !== false,
@@ -105,39 +112,16 @@ function createMurmurLaneChatService({
 
   async function getWebChatModels({ senderId = "" } = {}) {
     const context = resolveWebChatContext(senderId)
-    const runtimeAdapter = getRuntimeAdapter()
-    const sessionStore = runtimeAdapter.getSessionStore()
-    const settings = await cyberbossPort.getRuntimeSettings?.({
+    const settings = await getRuntimeSettings({
       bindingKey: context.bindingKey,
       workspaceRoot: context.workspaceRoot,
       refreshCatalog: true,
       waitForCatalogRefresh: false,
     })
-    if (settings) {
-      return settings
+    if (!settings || typeof settings !== "object") {
+      throw new Error("cyberbossPort.getRuntimeSettings must return runtime settings")
     }
-    const catalog = typeof runtimeAdapter.listAvailableModels === "function"
-      ? await runtimeAdapter.listAvailableModels({ refresh: true })
-      : sessionStore.getAvailableModelCatalog()
-    const runtimeParams = sessionStore.getRuntimeParamsForWorkspace(context.bindingKey, context.workspaceRoot)
-    return {
-      runtime: runtimeAdapter.describe().id,
-      currentModel: runtimeParams.model || normalizeCommandArgument(runtimeAdapter.describe().model),
-      currentModelProvider: runtimeParams.modelProvider || normalizeCommandArgument(runtimeAdapter.describe().modelProvider),
-      currentModelStatus: "unknown",
-      currentEffort: normalizeCommandArgument(runtimeParams.effort),
-      models: Array.isArray(catalog?.models) ? catalog.models : [],
-      updatedAt: catalog?.updatedAt || "",
-      refreshing: Boolean(catalog?.refreshing),
-      stale: Boolean(catalog?.stale),
-      error: normalizeCommandArgument(catalog?.error),
-      canRetry: Boolean(catalog?.canRetry),
-      effort: {
-        supported: false,
-        options: [],
-        defaultEffort: "",
-      },
-    }
+    return settings
   }
 
   async function setWebChatModel({ senderId = "", model = "", modelProvider = "" } = {}) {
@@ -146,47 +130,19 @@ function createMurmurLaneChatService({
     if (!query) {
       return getWebChatModels({ senderId: context.senderId })
     }
-    const updated = await updateWebChatRuntimeSettings({
+    return updateWebChatRuntimeSettings({
       senderId: context.senderId,
       model: query,
       modelProvider,
     })
-    if (updated) {
-      return updated
-    }
-    const runtimeAdapter = getRuntimeAdapter()
-    const sessionStore = runtimeAdapter.getSessionStore()
-    const catalog = typeof runtimeAdapter.listAvailableModels === "function"
-      ? await runtimeAdapter.listAvailableModels({ refresh: true })
-      : sessionStore.getAvailableModelCatalog()
-    const matched = findModelByQuery(catalog?.models || [], query)
-    if (!matched) {
-      throw new Error(`model not found: ${query}`)
-    }
-    sessionStore.setRuntimeParamsForWorkspace(context.bindingKey, context.workspaceRoot, {
-      model: matched.model,
-      ...(modelProvider ? { modelProvider } : {}),
-    })
-    adapter.publish({
-      kind: "model.updated",
-      senderId: context.senderId,
-      threadId: sessionStore.getThreadIdForWorkspace(context.bindingKey, context.workspaceRoot) || "",
-      model: matched.model,
-      modelProvider: modelProvider || "",
-    })
-    return getWebChatStatus({ senderId: context.senderId })
   }
 
   async function setWebChatEffort({ senderId = "", effort } = {}) {
     const context = resolveWebChatContext(senderId)
-    const updated = await updateWebChatRuntimeSettings({
+    return updateWebChatRuntimeSettings({
       senderId: context.senderId,
       effort,
     })
-    if (!updated) {
-      throw new Error("runtime settings command is unavailable")
-    }
-    return updated
   }
 
   async function updateWebChatRuntimeSettings({
@@ -199,7 +155,7 @@ function createMurmurLaneChatService({
     const runtimeAdapter = getRuntimeAdapter()
     const sessionStore = runtimeAdapter.getSessionStore()
     const selectedThreadId = sessionStore.getThreadIdForWorkspace(context.bindingKey, context.workspaceRoot) || ""
-    const settings = await cyberbossPort.updateRuntimeSettings?.({
+    const settings = await updateRuntimeSettings({
       bindingKey: context.bindingKey,
       workspaceRoot: context.workspaceRoot,
       ...(model !== undefined ? { model } : {}),
@@ -208,8 +164,8 @@ function createMurmurLaneChatService({
       senderId: context.senderId,
       threadId: selectedThreadId,
     })
-    if (!settings) {
-      return null
+    if (!settings || typeof settings !== "object") {
+      throw new Error("cyberbossPort.updateRuntimeSettings must return runtime settings")
     }
     return {
       ...getWebChatStatus({ senderId: context.senderId }),
@@ -279,7 +235,7 @@ function createMurmurLaneChatService({
       throw new Error("conversationCommands.deleteThreadRecords is required")
     }
     const result = await conversationCommands.deleteThreadRecords({ threadId: normalizedThreadId })
-    cyberbossPort.deleteThreadUsage?.(normalizedThreadId)
+    deleteThreadUsage(normalizedThreadId)
     return result
   }
 
@@ -336,30 +292,19 @@ function createMurmurLaneChatService({
           threadId: requestedThreadId,
           clientId: normalizedClientId,
         })
-        workspaceRoot = cyberbossPort.resolveWorkspaceRoot(context.bindingKey)
+        workspaceRoot = resolveWorkspaceRoot(context.bindingKey)
       }
     }
 
     const requestedModel = normalizeCommandArgument(model)
     if (requestedModel || effort !== undefined) {
       if (requestedModel && effort !== undefined) {
-        const updated = await updateWebChatRuntimeSettings({
+        await updateWebChatRuntimeSettings({
           senderId: context.senderId,
           model: requestedModel,
           modelProvider,
           effort,
         })
-        if (!updated) {
-          await setWebChatModel({
-            senderId: context.senderId,
-            model: requestedModel,
-            modelProvider,
-          })
-          await setWebChatEffort({
-            senderId: context.senderId,
-            effort,
-          })
-        }
       } else if (requestedModel) {
         await setWebChatModel({
           senderId: context.senderId,
@@ -415,7 +360,7 @@ function createMurmurLaneChatService({
       logicalTurnId: sendContract.logicalTurnId,
       bubbleSegments: sendContract.messages[0].bubbleSegments,
     })
-    const result = await cyberbossPort.routePreparedInbound({
+    const result = await routePreparedInbound({
       bindingKey: context.bindingKey,
       workspaceRoot,
       prepared,
@@ -573,12 +518,7 @@ function normalizeWebAttachment(item, stateDir, isPathWithinRoot) {
   }
 }
 
-function requirePortObject(port, methodName) {
-  const method = port[methodName]
-  if (typeof method !== "function") {
-    throw new Error(`cyberbossPort.${methodName} is required`)
-  }
-  const value = method()
+function requirePortObjectResult(value, methodName) {
   if (!value || typeof value !== "object") {
     throw new Error(`cyberbossPort.${methodName} must return an object`)
   }

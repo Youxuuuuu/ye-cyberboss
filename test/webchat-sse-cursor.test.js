@@ -47,9 +47,12 @@ test("chat status returns the cursor from the web adapter source for the selecte
           getLatestContext() { return null; },
         };
       },
+      getThreadUsageTotals() { return null; },
+      deleteThreadUsage() { return false; },
+      async getRuntimeSettings() { return {}; },
+      async updateRuntimeSettings() { return {}; },
       resolveWorkspaceRoot() { return "D:\\study\\cyberboss"; },
       async routePreparedInbound() { return null; },
-      findModelByQuery() { return null; },
       isPathWithinRoot() { return true; },
       buildInboundDraft(value) { return value; },
       buildMergedInboundPrepared(value) { return value; },

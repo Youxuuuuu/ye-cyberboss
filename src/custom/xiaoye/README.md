@@ -40,12 +40,10 @@ MurmurLane WebChat
 
 Chat Service 只能把消息交回 Cyberboss 现有入站流程，不得绕过 Runtime 直接写 Conversation。
 
-## 当前 Cyberboss Port
+## Cyberboss Port interface
 
-MurmurLane Chat Service 可使用：
+MurmurLane Chat Service 必需使用：
 
-- `resolveWeixinAccount`
-- `getActiveAccountId`
 - `getRuntimeAdapter`
 - `getThreadStateStore`
 - `getThreadUsageTotals`
@@ -54,11 +52,12 @@ MurmurLane Chat Service 可使用：
 - `updateRuntimeSettings`
 - `resolveWorkspaceRoot`
 - `routePreparedInbound`
-- `findModelByQuery`
 - `isPathWithinRoot`
 - `buildInboundDraft`
 - `buildMergedInboundPrepared`
 - `normalizeWorkspaceRoot`
+
+`resolveWeixinAccount` 与 `getActiveAccountId` 是现有身份兼容能力，不属于 Runtime Settings interface。
 
 Xiaoye 组合根另外使用：
 
@@ -66,7 +65,7 @@ Xiaoye 组合根另外使用：
 - `getRuntimeId`
 - `resolveConversationWorkspaceRoot`
 
-新增 Port 方法前，应先确认它代表稳定的跨边界能力，而不是把 `CyberbossApp` 的内部对象逐步暴露出去。
+新增 Port 方法前，应先确认它代表稳定语义，而不是把 `CyberbossApp` 的内部对象逐步暴露出去。完整所有权、数据流与扩展位置见 [`docs/architecture.md`](../../../docs/architecture.md)，Runtime Settings 与 Usage 的决定见 [`ADR-0001`](../../../docs/adr/0001-runtime-settings-and-thread-usage-have-one-owner.md)。
 
 `CyberbossApp` 中保留的固定接入点是：创建、启动和关闭 Xiaoye 组合根；向其转交 Runtime 事件、Runtime 设置更新事件、Inbound Conversation 记录和 Runtime Turn 创建结果；以及把 WebChat Adapter 注册到现有 Channel Router。设置事件只调用 Xiaoye 组合根公开的窄方法，不直接访问其内部 MurmurLane Adapter。WebChat 活动目标和线程事件由 MurmurLane 模块维护。
 
@@ -78,17 +77,9 @@ Xiaoye 组合根另外使用：
 - WebChat 输入仍通过 Cyberboss 现有的统一 Inbound Turn 与 Runtime 流程，不建立旁路。
 - 微信渠道和现有 Channel Router 行为不在本模块迁移范围内。
 
-## 本次保留的已知问题
+## 问题跟踪
 
-这次只迁移边界，下列既有问题没有修复：
-
-- Codex 初始化上下文可能被解析成普通用户消息。
-- Codex 仅附件用户消息可能被实时去重逻辑误删。
-- Codex 实时展示目前存在异常。
-- Linux 绝对路径处理存在问题。
-- ClaudeCode 原始 JSONL 可能在同一物理行包含两个 JSON 对象。
-- 实时与导入 Conversation 的 WebChat 专属字段仍有差异。
-- Conversation 字段命名和来源语义保持原样。
+README 只描述当前模块 interface，不保存会过期的问题快照。已知问题和实施状态记录在共享工程 tracker：`D:\study\.cyberboss\engineering-tracker`。
 
 ## 扩展方式
 
