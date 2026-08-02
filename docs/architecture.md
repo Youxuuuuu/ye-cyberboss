@@ -8,13 +8,13 @@
 - `AGENTS.md`：修改与跨仓库协作约束。
 - `docs/adr/`：已经接受、不可静默改变的架构决策。
 - `src/custom/xiaoye/README.md`：Xiaoye 扩展目录与 Port 摘要。
-- `D:\study\MurmurLane\docs\architecture\current-architecture.md`：MurmurLane 独立项目的消费侧架构。
+- MurmurLane 仓库中的 `docs/architecture/current-architecture.md`：MurmurLane 独立项目的消费侧架构。
 
 需求 tracker 和实施 `spec.md` 记录讨论与验收，不代替当前架构文档。
 
 ## 一句话架构
 
-> Cyberboss 拥有 Channel、Inbound Turn、Thread、Runtime、Runtime Settings、Usage 与 Conversation；Xiaoye 是扩展能力的组合根；MurmurLane 通过 WebChat 和 Conversation 契约消费结果，不拥有 Runtime 事实。
+> Cyberboss Core 拥有 Channel、Inbound Turn、Thread、Runtime、Runtime Settings 与 Thread Usage；`src/custom/xiaoye/conversation/` 拥有派生 Conversation Record 的生成与持久化；Xiaoye 是扩展能力组合根；MurmurLane 通过 WebChat 和 Conversation 契约消费结果，不拥有 Runtime 权威状态。
 
 不要以“完全不动 Core”为目标。跨渠道、跨 Runtime 的真实语义属于 Core 时，应放在 Core 的独立深模块中，再通过窄 interface 暴露；前端、Transport 或 Conversation 不得各自重建一份权威状态。
 
@@ -128,7 +128,7 @@ Cyberboss State Directory
    └─ Derived Conversation JSONL
 ```
 
-Codex 与 ClaudeCode 的 Raw Session Record 是只读来源。Conversation JSONL 是可重建的派生记录；只有 Cyberboss Conversation 流程可以写入。
+Codex 与 ClaudeCode 的 Raw Session Record 是只读来源。Conversation JSONL 是可重建的派生记录；只有 `src/custom/xiaoye/conversation/` 可以写入。
 
 ## Xiaoye Port interface
 

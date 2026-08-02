@@ -5,7 +5,7 @@ Cyberboss 连接人类消息渠道与 AI Runtime，并把运行过程投影为�
 ## Language
 
 **Cyberboss**:
-承接渠道消息、驱动 Runtime、维护线程状态并生成 Conversation Record 的主体系统。
+承接渠道消息、驱动 Runtime、维护线程状态，并通过 `src/custom/xiaoye/conversation/` 生成派生 Conversation Record 的主体系统。
 _Avoid_: MurmurLane 后端、微信机器人
 
 **Runtime**:
@@ -37,7 +37,7 @@ Codex 或 ClaudeCode 原始 session 中由 Runtime 产生的一条不可变来�
 _Avoid_: Conversation Record、WebChat 实时记录
 
 **Conversation Record**:
-Cyberboss 从渠道输入或 Raw Session Record 派生出的标准展示与检索记录。
+由 `src/custom/xiaoye/conversation/` 从渠道输入或 Raw Session Record 派生出的标准展示与检索记录。
 _Avoid_: 原始日志、前端组件状态
 
 **Conversation Archive**:
