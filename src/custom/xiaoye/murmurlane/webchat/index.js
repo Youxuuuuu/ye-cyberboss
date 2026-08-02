@@ -221,7 +221,8 @@ function createWebChatChannelAdapter({ config }) {
         threadId,
         turnId,
         ...turnIdentity,
-        usage: event.payload,
+        contextUsage: event.payload.contextSnapshot || event.payload,
+        usageTotals: event.payload.usageTotals || null,
       });
     }
 

@@ -92,6 +92,7 @@ function readConfig() {
     claudeExtraArgs: readListEnv("CYBERBOSS_CLAUDE_EXTRA_ARGS"),
     codexHome: readTextEnv("CODEX_HOME") || path.join(os.homedir(), ".codex"),
     sessionsFile: path.join(stateDir, "sessions.json"),
+    threadUsageFile: path.join(stateDir, "thread-usage.json"),
     conversationDir: path.join(stateDir, "conversations"),
     conversationRealtimeCheckpointFile: path.join(stateDir, "conversation-realtime-checkpoints.json"),
     conversationDeletionStateFile: path.join(stateDir, "conversation-deletion-state.json"),

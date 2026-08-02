@@ -81,6 +81,9 @@ function createMurmurLaneChatService({
     const runtimeParams = sessionStore.getRuntimeParamsForWorkspace(context.bindingKey, context.workspaceRoot)
     const contextUsage = threadState?.context
       || (!selectedThreadId ? threadStateStore.getLatestContext(runtimeAdapter.describe().id) : null)
+    const usageTotals = selectedThreadId
+      ? cyberbossPort.getThreadUsageTotals?.(selectedThreadId) || null
+      : null
     return {
       connected: config.webChatEnabled !== false,
       workspaceId: context.workspaceId,
@@ -88,7 +91,9 @@ function createMurmurLaneChatService({
       status: threadState?.status || "idle",
       model: runtimeParams.model || normalizeCommandArgument(runtimeAdapter.describe().model),
       modelProvider: runtimeParams.modelProvider || normalizeCommandArgument(runtimeAdapter.describe().modelProvider),
-      usage: contextUsage || null,
+      effort: normalizeCommandArgument(runtimeParams.effort),
+      contextUsage: contextUsage || null,
+      usageTotals,
       pendingApproval: threadState?.pendingApproval || null,
       webClients: adapter.getClientCount(),
       eventCursor: adapter.getEventCursor({
@@ -102,16 +107,36 @@ function createMurmurLaneChatService({
     const context = resolveWebChatContext(senderId)
     const runtimeAdapter = getRuntimeAdapter()
     const sessionStore = runtimeAdapter.getSessionStore()
+    const settings = await cyberbossPort.getRuntimeSettings?.({
+      bindingKey: context.bindingKey,
+      workspaceRoot: context.workspaceRoot,
+      refreshCatalog: true,
+      waitForCatalogRefresh: false,
+    })
+    if (settings) {
+      return settings
+    }
     const catalog = typeof runtimeAdapter.listAvailableModels === "function"
-      ? await runtimeAdapter.listAvailableModels()
+      ? await runtimeAdapter.listAvailableModels({ refresh: true })
       : sessionStore.getAvailableModelCatalog()
     const runtimeParams = sessionStore.getRuntimeParamsForWorkspace(context.bindingKey, context.workspaceRoot)
     return {
       runtime: runtimeAdapter.describe().id,
       currentModel: runtimeParams.model || normalizeCommandArgument(runtimeAdapter.describe().model),
       currentModelProvider: runtimeParams.modelProvider || normalizeCommandArgument(runtimeAdapter.describe().modelProvider),
+      currentModelStatus: "unknown",
+      currentEffort: normalizeCommandArgument(runtimeParams.effort),
       models: Array.isArray(catalog?.models) ? catalog.models : [],
       updatedAt: catalog?.updatedAt || "",
+      refreshing: Boolean(catalog?.refreshing),
+      stale: Boolean(catalog?.stale),
+      error: normalizeCommandArgument(catalog?.error),
+      canRetry: Boolean(catalog?.canRetry),
+      effort: {
+        supported: false,
+        options: [],
+        defaultEffort: "",
+      },
     }
   }
 
@@ -121,16 +146,20 @@ function createMurmurLaneChatService({
     if (!query) {
       return getWebChatModels({ senderId: context.senderId })
     }
+    const updated = await updateWebChatRuntimeSettings({
+      senderId: context.senderId,
+      model: query,
+      modelProvider,
+    })
+    if (updated) {
+      return updated
+    }
     const runtimeAdapter = getRuntimeAdapter()
     const sessionStore = runtimeAdapter.getSessionStore()
     const catalog = typeof runtimeAdapter.listAvailableModels === "function"
-      ? await runtimeAdapter.listAvailableModels()
+      ? await runtimeAdapter.listAvailableModels({ refresh: true })
       : sessionStore.getAvailableModelCatalog()
-    const runtimeId = runtimeAdapter.describe().id || "runtime"
-    let matched = findModelByQuery(catalog?.models || [], query)
-    if (!matched && runtimeId !== "codex" && !catalog?.models?.length) {
-      matched = { model: query }
-    }
+    const matched = findModelByQuery(catalog?.models || [], query)
     if (!matched) {
       throw new Error(`model not found: ${query}`)
     }
@@ -146,6 +175,46 @@ function createMurmurLaneChatService({
       modelProvider: modelProvider || "",
     })
     return getWebChatStatus({ senderId: context.senderId })
+  }
+
+  async function setWebChatEffort({ senderId = "", effort } = {}) {
+    const context = resolveWebChatContext(senderId)
+    const updated = await updateWebChatRuntimeSettings({
+      senderId: context.senderId,
+      effort,
+    })
+    if (!updated) {
+      throw new Error("runtime settings command is unavailable")
+    }
+    return updated
+  }
+
+  async function updateWebChatRuntimeSettings({
+    senderId = "",
+    model,
+    modelProvider,
+    effort,
+  } = {}) {
+    const context = resolveWebChatContext(senderId)
+    const runtimeAdapter = getRuntimeAdapter()
+    const sessionStore = runtimeAdapter.getSessionStore()
+    const selectedThreadId = sessionStore.getThreadIdForWorkspace(context.bindingKey, context.workspaceRoot) || ""
+    const settings = await cyberbossPort.updateRuntimeSettings?.({
+      bindingKey: context.bindingKey,
+      workspaceRoot: context.workspaceRoot,
+      ...(model !== undefined ? { model } : {}),
+      ...(modelProvider !== undefined ? { modelProvider } : {}),
+      ...(effort !== undefined ? { effort } : {}),
+      senderId: context.senderId,
+      threadId: selectedThreadId,
+    })
+    if (!settings) {
+      return null
+    }
+    return {
+      ...getWebChatStatus({ senderId: context.senderId }),
+      runtimeSettings: settings,
+    }
   }
 
   async function selectWebChatThread({ senderId = "", threadId = "", clientId = "" } = {}) {
@@ -167,6 +236,7 @@ function createMurmurLaneChatService({
       workspaceRoot: context.workspaceRoot,
       model: runtimeParams.model,
       modelProvider: runtimeParams.modelProvider,
+      effort: runtimeParams.effort,
     })
     const selectedThreadId = normalizeThreadId(resumed?.threadId) || normalizedThreadId
     sessionStore.setThreadIdForWorkspace(
@@ -208,7 +278,9 @@ function createMurmurLaneChatService({
     if (typeof conversationCommands?.deleteThreadRecords !== "function") {
       throw new Error("conversationCommands.deleteThreadRecords is required")
     }
-    return conversationCommands.deleteThreadRecords({ threadId: normalizedThreadId })
+    const result = await conversationCommands.deleteThreadRecords({ threadId: normalizedThreadId })
+    cyberbossPort.deleteThreadUsage?.(normalizedThreadId)
+    return result
   }
 
   async function handleWebChatMessages({
@@ -218,6 +290,7 @@ function createMurmurLaneChatService({
     newThread = false,
     model = "",
     modelProvider = "",
+    effort,
     requestId = "",
     batchId = "",
     messageId = "",
@@ -267,12 +340,38 @@ function createMurmurLaneChatService({
       }
     }
 
-    if (normalizeCommandArgument(model)) {
-      await setWebChatModel({
-        senderId: context.senderId,
-        model,
-        modelProvider,
-      })
+    const requestedModel = normalizeCommandArgument(model)
+    if (requestedModel || effort !== undefined) {
+      if (requestedModel && effort !== undefined) {
+        const updated = await updateWebChatRuntimeSettings({
+          senderId: context.senderId,
+          model: requestedModel,
+          modelProvider,
+          effort,
+        })
+        if (!updated) {
+          await setWebChatModel({
+            senderId: context.senderId,
+            model: requestedModel,
+            modelProvider,
+          })
+          await setWebChatEffort({
+            senderId: context.senderId,
+            effort,
+          })
+        }
+      } else if (requestedModel) {
+        await setWebChatModel({
+          senderId: context.senderId,
+          model: requestedModel,
+          modelProvider,
+        })
+      } else {
+        await setWebChatEffort({
+          senderId: context.senderId,
+          effort,
+        })
+      }
     }
 
     const sendContract = normalizeWebChatSendContract({
@@ -351,6 +450,7 @@ function createMurmurLaneChatService({
     getWebChatStatus,
     getWebChatModels,
     setWebChatModel,
+    setWebChatEffort,
     selectWebChatThread,
     deleteWebChatThread,
     handleWebChatMessages,

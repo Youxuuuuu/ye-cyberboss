@@ -8,7 +8,7 @@ const { DEFAULT_MIN_WEIXIN_CHUNK, MAX_MIN_WEIXIN_CHUNK } = require("../adapters/
 const { persistIncomingWeixinAttachments } = require("../adapters/channel/weixin/media-receive");
 const { createCodexRuntimeAdapter } = require("../adapters/runtime/codex");
 const { createClaudeCodeRuntimeAdapter } = require("../adapters/runtime/claudecode");
-const { findModelByQuery } = require("../adapters/runtime/codex/model-catalog");
+const { findModelByQuery } = require("../adapters/runtime/shared/model-catalog");
 const { createTimelineIntegration } = require("../integrations/timeline");
 const {
   assembleRuntimeTurnText,
@@ -27,6 +27,8 @@ const { CheckinConfigStore, parseCheckinRangeMinutes, resolveDefaultCheckinRange
 const { resolvePreferredSenderId, resolvePreferredWorkspaceRoot } = require("./default-targets");
 const { StreamDelivery } = require("./stream-delivery");
 const { ThreadStateStore } = require("./thread-state-store");
+const { ThreadUsageLedger } = require("./thread-usage-ledger");
+const { RuntimeSettingsService } = require("./runtime-settings-service");
 const { DeferredSystemReplyStore } = require("./deferred-system-reply-store");
 const { SystemMessageQueueStore } = require("./system-message-queue-store");
 const { SystemMessageDispatcher } = require("./system-message-dispatcher");
@@ -82,6 +84,11 @@ class CyberbossApp {
     this.runtimeContextStore = projectTooling.runtimeContextStore;
     this.runtimeAdapter = createRuntimeAdapter(config);
     this.threadStateStore = new ThreadStateStore();
+    this.threadUsageLedger = new ThreadUsageLedger({ filePath: config.threadUsageFile });
+    this.runtimeSettingsService = new RuntimeSettingsService({
+      runtimeAdapter: this.runtimeAdapter,
+      onUpdated: (event) => this.xiaoye.publishRuntimeSettingsUpdated(event),
+    });
     this.systemMessageQueue = new SystemMessageQueueStore({ filePath: config.systemMessageQueueFile });
     this.deferredSystemReplyQueue = new DeferredSystemReplyStore({ filePath: config.deferredSystemReplyQueueFile });
     this.checkinConfigStore = new CheckinConfigStore({ filePath: config.checkinConfigFile });
@@ -104,9 +111,10 @@ class CyberbossApp {
       this.runtimeEventChain = this.runtimeEventChain
         .catch(() => {})
         .then(() => {
-          this.xiaoye.handleRuntimeEvent(event, raw);
-          if (event) {
-            return this.handleRuntimeEvent(event);
+          const enrichedEvent = this.enrichRuntimeUsageEvent(event);
+          this.xiaoye.handleRuntimeEvent(enrichedEvent, raw);
+          if (enrichedEvent) {
+            return this.handleRuntimeEvent(enrichedEvent);
           }
           return null;
         })
@@ -117,12 +125,34 @@ class CyberbossApp {
     });
   }
 
+  enrichRuntimeUsageEvent(event) {
+    const observation = event?.payload?.usageObservation;
+    if (!observation) {
+      return event;
+    }
+    const usageTotals = this.threadUsageLedger.applyObservation(observation);
+    if (!usageTotals) {
+      return event;
+    }
+    return {
+      ...event,
+      payload: {
+        ...event.payload,
+        usageTotals,
+      },
+    };
+  }
+
   createXiaoyeCyberbossPort() {
     return {
       resolveWeixinAccount: () => this.weixinChannelAdapter.resolveAccount(),
       getActiveAccountId: () => this.activeAccountId,
       getRuntimeAdapter: () => this.runtimeAdapter,
       getThreadStateStore: () => this.threadStateStore,
+      getThreadUsageTotals: (threadId) => this.threadUsageLedger.getThreadUsageTotals(threadId),
+      deleteThreadUsage: (threadId) => this.threadUsageLedger.deleteThreadUsage(threadId),
+      getRuntimeSettings: (args) => this.runtimeSettingsService.getWorkspaceSettings(args),
+      updateRuntimeSettings: (args) => this.runtimeSettingsService.updateWorkspaceSettings(args),
       resolveWorkspaceRoot: (...args) => this.resolveWorkspaceRoot(...args),
       routePreparedInbound: (...args) => this.routePreparedInbound(...args),
       findModelByQuery,
@@ -490,7 +520,9 @@ class CyberbossApp {
     }).catch(() => {});
 
     try {
-      const model = this.runtimeAdapter.getSessionStore().getRuntimeParamsForWorkspace(bindingKey, workspaceRoot).model;
+      const runtimeParams = this.runtimeAdapter.getSessionStore().getRuntimeParamsForWorkspace(bindingKey, workspaceRoot);
+      const model = runtimeParams.model;
+      const effort = runtimeParams.effort || "";
       const runtimeTurn = await this.buildRuntimeTurn({ prepared, model });
       const sendTurn = typeof this.runtimeAdapter.sendTurn === "function"
         ? this.runtimeAdapter.sendTurn.bind(this.runtimeAdapter)
@@ -501,6 +533,7 @@ class CyberbossApp {
         text: runtimeTurn.text,
         attachments: runtimeTurn.attachments,
         model,
+        effort,
         metadata: {
           workspaceId: prepared.workspaceId,
           accountId: prepared.accountId,
@@ -1483,18 +1516,18 @@ class CyberbossApp {
     });
     const workspaceRoot = this.resolveWorkspaceRoot(bindingKey);
     const query = normalizeCommandArgument(command.args);
-    const sessionStore = this.runtimeAdapter.getSessionStore();
-    const catalog = typeof this.runtimeAdapter.listAvailableModels === "function"
-      ? await this.runtimeAdapter.listAvailableModels()
-      : sessionStore.getAvailableModelCatalog();
-    const currentModel = sessionStore.getRuntimeParamsForWorkspace(bindingKey, workspaceRoot).model;
+    const settings = await this.runtimeSettingsService.getWorkspaceSettings({
+      bindingKey,
+      workspaceRoot,
+      refreshCatalog: true,
+    });
 
     if (!query) {
       const lines = [
-        `Current model: ${currentModel || "(default)"}`,
+        `Current model: ${settings.currentModel || "(default)"}`,
       ];
-      if (catalog?.models?.length) {
-        lines.push(`Available models: ${catalog.models.map((item) => item.model).join(", ")}`);
+      if (settings.models.length) {
+        lines.push(`Available models: ${settings.models.map((item) => item.model).join(", ")}`);
       } else {
         lines.push("Available models: (not available)");
       }
@@ -1506,12 +1539,16 @@ class CyberbossApp {
       return;
     }
 
-    const runtimeId = this.runtimeAdapter.describe().id || "runtime";
-    let matched = findModelByQuery(catalog?.models || [], query);
-    if (!matched && runtimeId !== "codex" && !catalog?.models?.length) {
-      matched = { model: query };
-    }
-    if (!matched) {
+    let updated;
+    try {
+      updated = await this.runtimeSettingsService.updateWorkspaceSettings({
+        bindingKey,
+        workspaceRoot,
+        model: query,
+        senderId: normalized.senderId,
+        threadId: this.runtimeAdapter.getSessionStore().getThreadIdForWorkspace?.(bindingKey, workspaceRoot) || "",
+      });
+    } catch (error) {
       await this.channelAdapter.sendText({
         userId: normalized.senderId,
         text: `❌ Model not found\n${query}`,
@@ -1520,12 +1557,9 @@ class CyberbossApp {
       return;
     }
 
-    sessionStore.setRuntimeParamsForWorkspace(bindingKey, workspaceRoot, {
-      model: matched.model,
-    });
     await this.channelAdapter.sendText({
       userId: normalized.senderId,
-      text: `✅ Model switched\nworkspace: ${workspaceRoot}\nmodel: ${matched.model}`,
+      text: `✅ Model switched\nworkspace: ${workspaceRoot}\nmodel: ${updated.currentModel}`,
       contextToken: normalized.contextToken,
     });
   }

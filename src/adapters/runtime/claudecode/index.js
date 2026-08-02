@@ -7,11 +7,12 @@ const { ClaudeCodeProcessClient } = require("./process-client");
 const { mapClaudeCodeMessageToRuntimeEvent } = require("./events");
 const { ensureClaudeProjectMcpConfig } = require("./project-settings");
 const { SessionStore } = require("../codex/session-store");
-const { normalizeModelCatalog } = require("../codex/model-catalog");
 const { buildOpeningTurnText, buildInstructionRefreshText } = require("../shared-instructions");
 const { ClaudeCodeIpcServer } = require("./ipc-server");
 const { resolveClaudeCodeIpcConfig } = require("./ipc-paths");
 const { normalizeWorkspaceRoot } = require("../../../core/workspace-root");
+const { RuntimeModelCatalog } = require("../shared/runtime-model-catalog");
+const { createClaudeEffortCapabilitiesProbe } = require("./effort-capabilities");
 const CLAUDE_RESUME_SESSION_TIMEOUT_MS = 8000;
 const CLAUDE_MODEL_CATALOG_TTL_MS = 5 * 60 * 1000;
 
@@ -21,10 +22,24 @@ function createClaudeCodeRuntimeAdapter(config) {
   const pendingApprovals = new Map();
   const pendingModelByWorkspaceRoot = new Map();
   const configuredModel = normalizeText(config.claudeModel);
-  let availableModelCatalogCache = null;
   let globalListener = null;
   const ipcConfig = resolveClaudeCodeIpcConfig({ stateDir: config.stateDir });
   const ipcServer = new ClaudeCodeIpcServer(ipcConfig);
+  const getClaudeEffortCapabilities = createClaudeEffortCapabilitiesProbe({
+    command: config.claudeCommand || "claude",
+  });
+  const modelCatalog = new RuntimeModelCatalog({
+    sessionStore,
+    ttlMs: CLAUDE_MODEL_CATALOG_TTL_MS,
+    async fetchModels() {
+      const gatewayConfig = resolveClaudeGatewayConfig({ claudeConfigDir: config.claudeConfigDir });
+      if (!gatewayConfig.baseUrl || !gatewayConfig.authToken) {
+        throw new Error("Claude gateway model catalog is not configured");
+      }
+      const response = await fetchClaudeGatewayModels(gatewayConfig);
+      return response?.data || [];
+    },
+  });
 
   hydrateRuntimeModelsFromClaudeProjects();
 
@@ -47,15 +62,19 @@ function createClaudeCodeRuntimeAdapter(config) {
     return configuredModel || normalizeText(model);
   }
 
-  async function ensureClient(workspaceRoot, model = "") {
+  async function ensureClient(workspaceRoot, model = "", effort = "") {
     const normalizedWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot);
     if (!normalizedWorkspaceRoot) {
       throw new Error("workspaceRoot is required");
     }
     const desiredModel = resolveModel(model);
+    const desiredEffort = normalizeText(effort).toLowerCase();
     const existing = clientsByWorkspace.get(normalizedWorkspaceRoot);
     if (existing) {
-      if (normalizeText(existing.model) === desiredModel) {
+      if (
+        normalizeText(existing.model) === desiredModel
+        && normalizeText(existing.effort).toLowerCase() === desiredEffort
+      ) {
         return existing;
       }
       await closeWorkspaceClient(normalizedWorkspaceRoot);
@@ -72,6 +91,7 @@ function createClaudeCodeRuntimeAdapter(config) {
       cwd: normalizedWorkspaceRoot,
       env: filterClaudeCodeEnv(process.env),
       model: desiredModel,
+      effort: desiredEffort,
       permissionMode: config.claudePermissionMode || "default",
       disableVerbose: Boolean(config.claudeDisableVerbose),
       extraArgs: config.claudeExtraArgs || [],
@@ -111,16 +131,23 @@ function createClaudeCodeRuntimeAdapter(config) {
     return client;
   }
 
-  async function attachClientToThread(workspaceRoot, threadId = "", model = "") {
+  async function attachClientToThread(workspaceRoot, threadId = "", model = "", effort = "") {
     const normalizedWorkspaceRoot = normalizeWorkspaceRoot(workspaceRoot);
     const normalizedThreadId = normalizeThreadId(threadId);
     const desiredModel = resolveModel(model);
+    const desiredEffort = normalizeText(effort).toLowerCase();
     if (!normalizedWorkspaceRoot) {
       throw new Error("workspaceRoot is required");
     }
 
     const existingClient = clientsByWorkspace.get(normalizedWorkspaceRoot);
-    if (existingClient?.alive && normalizeText(existingClient.model) !== desiredModel) {
+    if (
+      existingClient?.alive
+      && (
+        normalizeText(existingClient.model) !== desiredModel
+        || normalizeText(existingClient.effort).toLowerCase() !== desiredEffort
+      )
+    ) {
       await closeWorkspaceClient(normalizedWorkspaceRoot);
     }
 
@@ -132,11 +159,11 @@ function createClaudeCodeRuntimeAdapter(config) {
       await closeWorkspaceClient(normalizedWorkspaceRoot);
     }
 
-    let client = await ensureClient(normalizedWorkspaceRoot, desiredModel);
+    let client = await ensureClient(normalizedWorkspaceRoot, desiredModel, desiredEffort);
     if (!client.alive || (normalizedThreadId && !clientMatchesThread(client, normalizedThreadId))) {
       if (client.alive && normalizedThreadId && !clientMatchesThread(client, normalizedThreadId)) {
         await closeWorkspaceClient(normalizedWorkspaceRoot);
-        client = await ensureClient(normalizedWorkspaceRoot, desiredModel);
+        client = await ensureClient(normalizedWorkspaceRoot, desiredModel, desiredEffort);
       }
       await client.connect(normalizedThreadId);
     }
@@ -185,6 +212,9 @@ function createClaudeCodeRuntimeAdapter(config) {
     getSessionStore() {
       return sessionStore;
     },
+    getEffortCapabilities() {
+      return getClaudeEffortCapabilities();
+    },
     getTurnCapabilities({ model = "" } = {}) {
       const effectiveModel = resolveModel(model);
       return {
@@ -192,31 +222,8 @@ function createClaudeCodeRuntimeAdapter(config) {
         toolImageRead: hasClaudeImageFileRead(effectiveModel),
       };
     },
-    async listAvailableModels() {
-      if (
-        availableModelCatalogCache
-        && Date.now() - Date.parse(availableModelCatalogCache.updatedAt || "") < CLAUDE_MODEL_CATALOG_TTL_MS
-      ) {
-        return availableModelCatalogCache;
-      }
-      const gatewayConfig = resolveClaudeGatewayConfig({ claudeConfigDir: config.claudeConfigDir });
-      if (!gatewayConfig.baseUrl || !gatewayConfig.authToken) {
-        return availableModelCatalogCache;
-      }
-      try {
-        const response = await fetchClaudeGatewayModels(gatewayConfig);
-        const models = normalizeModelCatalog(response?.data);
-        if (!models.length) {
-          return availableModelCatalogCache;
-        }
-        availableModelCatalogCache = {
-          models,
-          updatedAt: new Date().toISOString(),
-        };
-        return availableModelCatalogCache;
-      } catch {
-        return availableModelCatalogCache;
-      }
+    async listAvailableModels(options = {}) {
+      return modelCatalog.list(options);
     },
     async initialize() {
       hydrateRuntimeModelsFromClaudeProjects();
@@ -273,20 +280,20 @@ function createClaudeCodeRuntimeAdapter(config) {
       }
       return { threadId, turnId };
     },
-    async resumeThread({ threadId, workspaceRoot, model = "" }) {
+    async resumeThread({ threadId, workspaceRoot, model = "", effort = "" }) {
       if (!workspaceRoot) {
         return { threadId };
       }
-      const attached = await attachClientToThread(workspaceRoot, threadId, model);
+      const attached = await attachClientToThread(workspaceRoot, threadId, model, effort);
       return { threadId: attached.threadId };
     },
-    async compactThread({ threadId, workspaceRoot, model = "" }) {
-      const { client, threadId: activeThreadId } = await attachClientToThread(workspaceRoot, threadId, model);
+    async compactThread({ threadId, workspaceRoot, model = "", effort = "" }) {
+      const { client, threadId: activeThreadId } = await attachClientToThread(workspaceRoot, threadId, model, effort);
       await client.sendUserMessage({ text: "/compact", threadId: activeThreadId });
       return { threadId: activeThreadId, turnId: client.pendingTurnId };
     },
-    async refreshThreadInstructions({ threadId, workspaceRoot, model = "" }) {
-      const { client, threadId: activeThreadId } = await attachClientToThread(workspaceRoot, threadId, model);
+    async refreshThreadInstructions({ threadId, workspaceRoot, model = "", effort = "" }) {
+      const { client, threadId: activeThreadId } = await attachClientToThread(workspaceRoot, threadId, model, effort);
       const refreshText = buildInstructionRefreshText(config);
       await client.sendUserMessage({ text: refreshText, threadId: activeThreadId });
       return { threadId: activeThreadId };
@@ -294,8 +301,10 @@ function createClaudeCodeRuntimeAdapter(config) {
     async sendTextTurn(args) {
       return this.sendTurn(args);
     },
-    async sendTurn({ bindingKey, workspaceRoot, text, metadata = {}, model = "" }) {
+    async sendTurn({ bindingKey, workspaceRoot, text, metadata = {}, model = "", effort = "" }) {
       const desiredModel = resolveModel(model);
+      const storedParams = sessionStore.getRuntimeParamsForWorkspace(bindingKey, workspaceRoot);
+      const desiredEffort = normalizeText(effort || storedParams.effort).toLowerCase();
       let threadId = sessionStore.getThreadIdForWorkspace(bindingKey, workspaceRoot);
       if (!threadId) {
         sessionStore.clearThreadIdForWorkspace(bindingKey, workspaceRoot);
@@ -304,12 +313,13 @@ function createClaudeCodeRuntimeAdapter(config) {
         sessionStore.setRuntimeParamsForWorkspace(bindingKey, workspaceRoot, {
           model: desiredModel,
           modelProvider: "",
+          effort: desiredEffort,
         });
       }
       let openingTurn = !threadId;
       let attached;
       try {
-        attached = await attachClientToThread(workspaceRoot, threadId, desiredModel);
+        attached = await attachClientToThread(workspaceRoot, threadId, desiredModel, desiredEffort);
       } catch (error) {
         if (!threadId) {
           throw error;
@@ -317,7 +327,7 @@ function createClaudeCodeRuntimeAdapter(config) {
         sessionStore.clearThreadIdForWorkspace(bindingKey, workspaceRoot);
         threadId = "";
         openingTurn = true;
-        attached = await attachClientToThread(workspaceRoot, "", desiredModel);
+        attached = await attachClientToThread(workspaceRoot, "", desiredModel, desiredEffort);
       }
       const { client, threadId: activeThreadId } = attached;
       const outboundText = openingTurn ? buildOpeningTurnText(config, text) : text;

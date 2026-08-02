@@ -35,6 +35,7 @@ class SessionStore {
         bindings: parsed.bindings || {},
         approvalCommandAllowlistByWorkspaceRoot: parsed.approvalCommandAllowlistByWorkspaceRoot || {},
         approvalPromptStateByThreadId: parsed.approvalPromptStateByThreadId || {},
+        modelCatalogByRuntime: parsed.modelCatalogByRuntime || {},
         availableModelCatalog: parsed.availableModelCatalog || {
           models: [],
           updatedAt: "",
@@ -142,10 +143,12 @@ class SessionStore {
     const runtimeId = normalizeValue(this.runtimeId);
     const entry = getRuntimeParamsMapForRuntime(current, runtimeId)[normalizedWorkspaceRoot]
       || (runtimeId === "codex" ? getCodexParamsMap(current)[normalizedWorkspaceRoot] : null);
-    return {
+    const result = {
       model: normalizeValue(entry?.model),
       modelProvider: normalizeValue(entry?.modelProvider || entry?.model_provider),
     };
+    const effort = normalizeValue(entry?.effort);
+    return effort ? { ...result, effort } : result;
   }
 
   setRuntimeParamsForWorkspace(bindingKey, workspaceRoot, params = {}) {
@@ -160,12 +163,14 @@ class SessionStore {
       || {};
     const hasModel = Object.prototype.hasOwnProperty.call(params, "model");
     const hasModelProvider = Object.prototype.hasOwnProperty.call(params, "modelProvider");
+    const hasEffort = Object.prototype.hasOwnProperty.call(params, "effort");
     const nextEntry = {
       ...previousEntry,
       model: hasModel ? normalizeValue(params.model) : normalizeValue(previousEntry.model),
       modelProvider: hasModelProvider
         ? normalizeValue(params.modelProvider)
         : normalizeValue(previousEntry.modelProvider || previousEntry.model_provider),
+      effort: hasEffort ? normalizeValue(params.effort) : normalizeValue(previousEntry.effort),
     };
     const runtimeParamsByWorkspaceRootByRuntime = {
       ...getRuntimeParamsRuntimeMap(current),
@@ -364,29 +369,40 @@ class SessionStore {
   }
 
   getAvailableModelCatalog() {
-    const raw = this.state.availableModelCatalog;
+    const runtimeId = normalizeValue(this.runtimeId) || "default";
+    const raw = this.state.modelCatalogByRuntime?.[runtimeId];
     if (!raw || typeof raw !== "object") {
       return null;
     }
     const models = normalizeModelCatalog(raw.models);
-    if (!models.length) {
+    const updatedAt = normalizeValue(raw.updatedAt);
+    if (!models.length && !updatedAt) {
       return null;
     }
-    const updatedAt = normalizeValue(raw.updatedAt);
-    return { models, updatedAt };
+    return {
+      models,
+      updatedAt,
+      missingSuccessCounts: normalizeMissingSuccessCounts(raw.missingSuccessCounts),
+    };
   }
 
-  setAvailableModelCatalog(models) {
+  setAvailableModelCatalog(models, metadata = {}) {
     const normalizedModels = normalizeModelCatalog(models);
-    if (!normalizedModels.length) {
+    if (!normalizedModels.length && metadata.allowEmpty !== true) {
       return null;
     }
-    this.state.availableModelCatalog = {
+    const runtimeId = normalizeValue(this.runtimeId) || "default";
+    const catalog = {
       models: normalizedModels,
-      updatedAt: new Date().toISOString(),
+      updatedAt: normalizeValue(metadata.updatedAt) || new Date().toISOString(),
+      missingSuccessCounts: normalizeMissingSuccessCounts(metadata.missingSuccessCounts),
+    };
+    this.state.modelCatalogByRuntime = {
+      ...(this.state.modelCatalogByRuntime || {}),
+      [runtimeId]: catalog,
     };
     this.save();
-    return this.state.availableModelCatalog;
+    return catalog;
   }
 
   buildBindingKey({ workspaceId, accountId, senderId }) {
@@ -399,6 +415,7 @@ function createEmptyState() {
     bindings: {},
     approvalCommandAllowlistByWorkspaceRoot: {},
     approvalPromptStateByThreadId: {},
+    modelCatalogByRuntime: {},
     availableModelCatalog: {
       models: [],
       updatedAt: "",
@@ -416,6 +433,11 @@ function normalizeSessionState(state) {
     nextState.approvalCommandAllowlistByWorkspaceRoot
   );
   nextState.approvalPromptStateByThreadId = normalizeApprovalPromptStateMap(nextState.approvalPromptStateByThreadId);
+  const legacyCatalog = normalizeModelCatalogState(nextState.availableModelCatalog);
+  nextState.modelCatalogByRuntime = normalizeModelCatalogRuntimeMap(nextState.modelCatalogByRuntime);
+  if (!nextState.modelCatalogByRuntime.codex?.models?.length && legacyCatalog.models.length) {
+    nextState.modelCatalogByRuntime.codex = legacyCatalog;
+  }
   nextState.availableModelCatalog = {
     models: normalizeModelCatalog(nextState.availableModelCatalog?.models),
     updatedAt: normalizeValue(nextState.availableModelCatalog?.updatedAt),
@@ -524,7 +546,46 @@ function normalizeRuntimeParamsEntry(entry, previousEntry = {}) {
     model: normalizeValue(current.model) || normalizeValue(previous.model),
     modelProvider: normalizeValue(current.modelProvider || current.model_provider)
       || normalizeValue(previous.modelProvider || previous.model_provider),
+    effort: normalizeValue(current.effort) || normalizeValue(previous.effort),
   };
+}
+
+function normalizeModelCatalogRuntimeMap(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const result = {};
+  for (const [rawRuntimeId, rawCatalog] of Object.entries(value)) {
+    const runtimeId = normalizeValue(rawRuntimeId);
+    if (!runtimeId) {
+      continue;
+    }
+    result[runtimeId] = normalizeModelCatalogState(rawCatalog);
+  }
+  return result;
+}
+
+function normalizeModelCatalogState(value) {
+  return {
+    models: normalizeModelCatalog(value?.models),
+    updatedAt: normalizeValue(value?.updatedAt),
+    missingSuccessCounts: normalizeMissingSuccessCounts(value?.missingSuccessCounts),
+  };
+}
+
+function normalizeMissingSuccessCounts(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const result = {};
+  for (const [rawModel, rawCount] of Object.entries(value)) {
+    const model = normalizeValue(rawModel).toLowerCase();
+    const count = Number(rawCount);
+    if (model && Number.isSafeInteger(count) && count > 0) {
+      result[model] = count;
+    }
+  }
+  return result;
 }
 
 function normalizeApprovalAllowlistMap(map) {
@@ -657,6 +718,7 @@ function normalizeRuntimeParamsEntryForComparison(entry) {
   return {
     model: normalizeValue(entry?.model),
     modelProvider: normalizeValue(entry?.modelProvider || entry?.model_provider),
+    effort: normalizeValue(entry?.effort),
   };
 }
 

@@ -12,7 +12,7 @@ class ThreadStateStore {
       const updatedAt = new Date().toISOString();
       const runtimeId = normalizeRuntimeId(event?.payload?.runtimeId);
       const snapshot = {
-        ...event.payload,
+        ...(event.payload.contextSnapshot || event.payload),
         updatedAt,
       };
       if (runtimeId) {

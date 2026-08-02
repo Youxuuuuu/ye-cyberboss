@@ -210,6 +210,15 @@ function createWebChatServer({ config, chatService, adapter }) {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/chat/effort") {
+      const body = await readJsonBody(request, 256 * 1024);
+      sendJson(response, 200, await chatService.setWebChatEffort({
+        ...body,
+        senderId: identity.senderId,
+      }));
+      return;
+    }
+
     sendJson(response, 404, { error: "not found" });
   }
 

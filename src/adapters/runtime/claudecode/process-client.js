@@ -6,11 +6,12 @@ const IS_WINDOWS = os.platform() === "win32";
 const WINDOWS_EXECUTABLE_SUFFIX_RE = /\.(cmd|exe|bat)$/i;
 
 class ClaudeCodeProcessClient {
-  constructor({ command = "claude", cwd, env, model = "", permissionMode = "default", disableVerbose = false, extraArgs = [], mcpConfigPaths = [], ipcServer = null, workspaceRoot = "" }) {
+  constructor({ command = "claude", cwd, env, model = "", effort = "", permissionMode = "default", disableVerbose = false, extraArgs = [], mcpConfigPaths = [], ipcServer = null, workspaceRoot = "" }) {
     this.command = command;
     this.cwd = cwd;
     this.env = env;
     this.model = model;
+    this.effort = effort;
     this.permissionMode = permissionMode;
     this.disableVerbose = disableVerbose;
     this.extraArgs = extraArgs;
@@ -56,8 +57,9 @@ class ClaudeCodeProcessClient {
     this.sessionId = "";
     this.resumeSessionId = isValidSessionId(resumeSessionId) ? resumeSessionId : "";
     this.activeThreadId = "";
-    const args = buildArgs({
+    const args = buildClaudeProcessArgs({
       model: this.model,
+      effort: this.effort,
       permissionMode: this.permissionMode,
       disableVerbose: this.disableVerbose,
       extraArgs: this.extraArgs,
@@ -249,6 +251,14 @@ class ClaudeCodeProcessClient {
       if (!reportedSessionId) {
         return;
       }
+    }
+    if (raw?.usage && typeof raw.usage === "object") {
+      this.emit({
+        type: "context.updated",
+        usage: raw.usage,
+        turnId: this.pendingTurnId,
+        sessionId: this.activeThreadId || this.sessionId,
+      }, raw);
     }
     this.emit({
       type: "turn.completed",
@@ -444,7 +454,7 @@ class ClaudeCodeProcessClient {
   }
 }
 
-function buildArgs({ model, permissionMode, disableVerbose, extraArgs, mcpConfigPaths, resumeSessionId }) {
+function buildClaudeProcessArgs({ model, effort, permissionMode, disableVerbose, extraArgs, mcpConfigPaths, resumeSessionId }) {
   const args = [
     "--output-format", "stream-json",
     "--input-format", "stream-json",
@@ -462,6 +472,9 @@ function buildArgs({ model, permissionMode, disableVerbose, extraArgs, mcpConfig
   }
   if (model) {
     args.push("--model", model);
+  }
+  if (effort) {
+    args.push("--effort", effort);
   }
   if (Array.isArray(mcpConfigPaths)) {
     for (const configPath of mcpConfigPaths) {
@@ -542,4 +555,4 @@ function isPotentiallySensitive(text) {
   return SENSITIVE_KEYWORDS.test(text) || SENSITIVE_PATTERNS.test(text);
 }
 
-module.exports = { ClaudeCodeProcessClient };
+module.exports = { ClaudeCodeProcessClient, buildClaudeProcessArgs };

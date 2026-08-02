@@ -151,19 +151,43 @@ function truncateCommand(text, maxLines = 6, maxLineLength = 100) {
 function normalizeClaudeContextPayload(message, raw) {
   const usage = raw?.message?.usage && typeof raw.message.usage === "object"
     ? raw.message.usage
-    : (message?.usage && typeof message.usage === "object" ? message.usage : {});
+    : raw?.usage && typeof raw.usage === "object"
+      ? raw.usage
+      : (message?.usage && typeof message.usage === "object" ? message.usage : {});
+  const runtimeId = "claudecode";
+  const threadId = normalizeString(message?.sessionId);
+  const observationId = normalizeString(
+    message?.turnId
+      || raw?.message?.id
+      || message?.messageId
+      || message?.message_id
+  );
   const inputTokens = numberOrZero(usage.input_tokens);
   const cacheCreationInputTokens = numberOrZero(usage.cache_creation_input_tokens);
   const cacheReadInputTokens = numberOrZero(usage.cache_read_input_tokens);
   const outputTokens = numberOrZero(usage.output_tokens);
-  return {
-    runtimeId: "claudecode",
-    threadId: normalizeString(message?.sessionId),
+  const contextSnapshot = {
+    runtimeId,
+    threadId,
     inputTokens,
     cacheCreationInputTokens,
     cacheReadInputTokens,
     outputTokens,
     currentTokens: inputTokens + cacheCreationInputTokens + cacheReadInputTokens + outputTokens,
+  };
+  return {
+    ...contextSnapshot,
+    contextSnapshot,
+    usageObservation: {
+      kind: "message",
+      runtimeId,
+      threadId,
+      observationId,
+      inputTokens,
+      cacheCreationInputTokens,
+      cacheReadInputTokens,
+      outputTokens,
+    },
   };
 }
 

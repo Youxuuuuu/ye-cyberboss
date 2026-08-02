@@ -42,6 +42,17 @@ test("handleModelCommand shows the runtime-provided model catalog for claudecode
         };
       },
     },
+    runtimeSettingsService: {
+      async getWorkspaceSettings() {
+        return {
+          currentModel: "deepseek-v4-flash",
+          models: [
+            { model: "deepseek-v4-flash" },
+            { model: "sensenova-6.7-flash-lite" },
+          ],
+        };
+      },
+    },
     channelAdapter: {
       async sendText(payload) {
         sent.push(payload.text);
@@ -64,7 +75,7 @@ test("handleModelCommand shows the runtime-provided model catalog for claudecode
   );
 });
 
-test("handleModelCommand still accepts exact claudecode model names when the catalog is unavailable", async () => {
+test("handleModelCommand rejects an unverified claudecode model when the catalog is unavailable", async () => {
   const calls = [];
   const appLike = {
     resolveWorkspaceRoot() {
@@ -94,6 +105,19 @@ test("handleModelCommand still accepts exact claudecode model names when the cat
         };
       },
     },
+    runtimeSettingsService: {
+      async getWorkspaceSettings() {
+        return {
+          currentModel: "deepseek-v4-flash",
+          models: [],
+        };
+      },
+      async updateWorkspaceSettings() {
+        const error = new Error("model not found");
+        error.code = "MODEL_NOT_FOUND";
+        throw error;
+      },
+    },
     channelAdapter: {
       async sendText(payload) {
         calls.push(["send", payload.text]);
@@ -111,7 +135,6 @@ test("handleModelCommand still accepts exact claudecode model names when the cat
   });
 
   assert.deepEqual(calls, [
-    ["set", "binding-1", "/workspace", { model: "glm-4.6v" }],
-    ["send", "✅ Model switched\nworkspace: /workspace\nmodel: glm-4.6v"],
+    ["send", "❌ Model not found\nglm-4.6v"],
   ]);
 });

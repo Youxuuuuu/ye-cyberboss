@@ -8,7 +8,10 @@ const fs = require("node:fs");
 const { CyberbossApp } = require("../src/core/app");
 const { mapClaudeCodeMessageToRuntimeEvent } = require("../src/adapters/runtime/claudecode/events");
 const { createClaudeCodeRuntimeAdapter } = require("../src/adapters/runtime/claudecode");
-const { ClaudeCodeProcessClient } = require("../src/adapters/runtime/claudecode/process-client");
+const {
+  ClaudeCodeProcessClient,
+  buildClaudeProcessArgs,
+} = require("../src/adapters/runtime/claudecode/process-client");
 const { SessionStore } = require("../src/adapters/runtime/codex/session-store");
 
 test("claudecode approval events extract command tokens from exec_command input", () => {
@@ -319,9 +322,11 @@ test("claudecode assistant events map usage into context snapshots", () => {
     {
       type: "context.updated",
       sessionId: "thread-1",
+      messageId: "message-1",
     },
     {
       message: {
+        id: "message-1",
         usage: {
           input_tokens: 7,
           cache_creation_input_tokens: 12150,
@@ -336,6 +341,80 @@ test("claudecode assistant events map usage into context snapshots", () => {
   assert.equal(event.payload.runtimeId, "claudecode");
   assert.equal(event.payload.threadId, "thread-1");
   assert.equal(event.payload.currentTokens, 27201);
+  assert.deepEqual(event.payload.contextSnapshot, {
+    runtimeId: "claudecode",
+    threadId: "thread-1",
+    inputTokens: 7,
+    cacheCreationInputTokens: 12150,
+    cacheReadInputTokens: 13535,
+    outputTokens: 1509,
+    currentTokens: 27201,
+  });
+  assert.deepEqual(event.payload.usageObservation, {
+    kind: "message",
+    runtimeId: "claudecode",
+    threadId: "thread-1",
+    observationId: "message-1",
+    inputTokens: 7,
+    cacheCreationInputTokens: 12150,
+    cacheReadInputTokens: 13535,
+    outputTokens: 1509,
+  });
+});
+
+test("claudecode result usage replaces zero assistant usage for the same turn", () => {
+  const client = new ClaudeCodeProcessClient({
+    command: "claude",
+    cwd: process.cwd(),
+  });
+  client.sessionId = "thread-result-usage";
+  client.activeThreadId = "thread-result-usage";
+  client.pendingTurnId = "turn-result-usage";
+
+  const contextEvents = [];
+  client.onMessage((message, raw) => {
+    const mapped = mapClaudeCodeMessageToRuntimeEvent(message, raw);
+    if (mapped?.type === "runtime.context.updated") {
+      contextEvents.push(mapped);
+    }
+  });
+
+  client.handleAssistant({
+    type: "assistant",
+    message: {
+      id: "message-zero-usage",
+      content: [{ type: "text", text: "OK" }],
+      usage: {
+        input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        output_tokens: 0,
+      },
+    },
+  });
+  client.handleResult({
+    type: "result",
+    session_id: "thread-result-usage",
+    result: "OK",
+    usage: {
+      input_tokens: 39_461,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 12_000,
+      output_tokens: 15,
+    },
+  });
+
+  assert.equal(contextEvents.length, 2);
+  assert.deepEqual(contextEvents.at(-1).payload.usageObservation, {
+    kind: "message",
+    runtimeId: "claudecode",
+    threadId: "thread-result-usage",
+    observationId: "turn-result-usage",
+    inputTokens: 39_461,
+    cacheCreationInputTokens: 0,
+    cacheReadInputTokens: 12_000,
+    outputTokens: 15,
+  });
 });
 
 test("claudecode adapter dispatches turns only after a real session id is available", async () => {
@@ -432,6 +511,23 @@ test("claudecode process client treats assistant text as non-deliverable until t
   assert.equal(completed.payload.threadId, "thread-tool");
   assert.equal(completed.payload.turnId, "turn-tool");
   assert.equal(completed.payload.text, "查完了，这是工具后的最终结果。");
+});
+
+test("claudecode process args omit default effort and pass an explicit supported effort", () => {
+  const base = {
+    model: "claude-opus",
+    permissionMode: "default",
+    disableVerbose: true,
+    extraArgs: [],
+    mcpConfigPaths: [],
+    resumeSessionId: "",
+  };
+  assert.equal(buildClaudeProcessArgs({ ...base, effort: "" }).includes("--effort"), false);
+  const explicit = buildClaudeProcessArgs({ ...base, effort: "high" });
+  assert.deepEqual(explicit.slice(explicit.indexOf("--effort"), explicit.indexOf("--effort") + 2), [
+    "--effort",
+    "high",
+  ]);
 });
 
 test("claudecode runtime params are isolated from codex model selections", () => {

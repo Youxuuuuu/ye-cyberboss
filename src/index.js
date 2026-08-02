@@ -11,6 +11,7 @@ const { buildTerminalHelpText } = require("./core/command-registry");
 const { ensureStickerCatalogFilesSync } = require("./services/sticker-service");
 const { runToolMcpServer } = require("./tools/mcp-stdio-server");
 const { normalizeWorkspaceRoot } = require("./core/workspace-root");
+const { ThreadUsageLedger } = require("./core/thread-usage-ledger");
 const { createXiaoyeProjectTooling } = require("./custom/xiaoye");
 const {
   ConversationImporter,
@@ -248,6 +249,11 @@ function runConversationDeleteCommand({ args = [], config = {} } = {}) {
     logger: console,
   });
   const result = writer.deleteThreadRecords({ threadId });
+  const usageLedger = new ThreadUsageLedger({
+    filePath: config.threadUsageFile
+      || path.join(path.resolve(config.stateDir || path.dirname(conversationDir)), "thread-usage.json"),
+  });
+  usageLedger.deleteThreadUsage(threadId);
   if (args.includes("--json")) {
     console.log(JSON.stringify({ ok: true, ...result }));
     return result;

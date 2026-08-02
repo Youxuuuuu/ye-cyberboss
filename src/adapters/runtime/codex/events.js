@@ -13,11 +13,11 @@ const {
   normalizeCommandTokens,
 } = require("../shared/approval-command");
 
-function mapCodexMessageToRuntimeEvent(message) {
+function mapCodexMessageToRuntimeEvent(message, { threadId: fallbackThreadId = "" } = {}) {
   if (message?.type === "event_msg" && message?.payload?.type === "token_count") {
     return {
       type: "runtime.context.updated",
-      payload: normalizeContextPayload(message),
+      payload: normalizeContextPayload(message, { fallbackThreadId }),
     };
   }
   const method = normalizeString(message?.method);
@@ -114,19 +114,44 @@ function mapCodexMessageToRuntimeEvent(message) {
   return null;
 }
 
-function normalizeContextPayload(message) {
+function normalizeContextPayload(message, { fallbackThreadId = "" } = {}) {
   const payload = message?.payload || {};
   const info = payload?.info || {};
   const total = info?.total_token_usage || {};
-  return {
-    runtimeId: "codex",
-    threadId: normalizeString(payload?.thread_id || info?.thread_id),
-    inputTokens: numberOrZero(total.input_tokens),
-    cachedInputTokens: numberOrZero(total.cached_input_tokens),
-    outputTokens: numberOrZero(total.output_tokens),
-    reasoningTokens: numberOrZero(total.reasoning_output_tokens),
-    currentTokens: numberOrZero(total.total_tokens),
+  const hasLast = info?.last_token_usage && typeof info.last_token_usage === "object";
+  const last = hasLast ? info.last_token_usage : total;
+  const runtimeId = "codex";
+  const threadId = normalizeString(payload?.thread_id || info?.thread_id || fallbackThreadId);
+  const contextSnapshot = {
+    runtimeId,
+    threadId,
+    inputTokens: numberOrZero(last.input_tokens),
+    cachedInputTokens: numberOrZero(last.cached_input_tokens),
+    outputTokens: numberOrZero(last.output_tokens),
+    reasoningTokens: numberOrZero(last.reasoning_output_tokens),
+    currentTokens: numberOrZero(last.total_tokens),
     contextWindow: numberOrZero(info?.model_context_window),
+  };
+  return {
+    ...contextSnapshot,
+    contextSnapshot,
+    usageObservation: {
+      kind: "cumulative",
+      runtimeId,
+      threadId,
+      total: {
+        inputTokens: numberOrZero(total.input_tokens),
+        cacheReadInputTokens: numberOrZero(total.cached_input_tokens),
+        outputTokens: numberOrZero(total.output_tokens),
+      },
+      last: hasLast
+        ? {
+            inputTokens: numberOrZero(last.input_tokens),
+            cacheReadInputTokens: numberOrZero(last.cached_input_tokens),
+            outputTokens: numberOrZero(last.output_tokens),
+          }
+        : null,
+    },
   };
 }
 

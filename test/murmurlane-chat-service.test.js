@@ -61,6 +61,17 @@ test("murmurlane chat service resolves identity and status through the narrow cy
           getLatestContext() { return null },
         }
       },
+      getThreadUsageTotals(threadId) {
+        return threadId === "thread-1"
+          ? {
+              inputTokens: 120,
+              outputTokens: 20,
+              cacheReadInputTokens: 80,
+              totalTokens: 140,
+              cacheHitRate: 2 / 3,
+            }
+          : null
+      },
       resolveWorkspaceRoot() {
         return "D:/study/cyberboss"
       },
@@ -88,7 +99,15 @@ test("murmurlane chat service resolves identity and status through the narrow cy
     status: "idle",
     model: "model-1",
     modelProvider: "provider-1",
-    usage: null,
+    effort: "",
+    contextUsage: null,
+    usageTotals: {
+      inputTokens: 120,
+      outputTokens: 20,
+      cacheReadInputTokens: 80,
+      totalTokens: 140,
+      cacheHitRate: 2 / 3,
+    },
     pendingApproval: null,
     webClients: 2,
     eventCursor: 73,
@@ -108,6 +127,7 @@ test("murmurlane chat service delegates deletion of an idle thread to conversati
   })
 
   assert.deepEqual(harness.deleteCalls, [{ threadId: "thread-delete" }])
+  assert.deepEqual(harness.usageDeleteCalls, ["thread-delete"])
   assert.deepEqual(result, {
     threadId: "thread-delete",
     deletedRecordCount: 2,
@@ -302,6 +322,42 @@ test("murmurlane chat service rejects an attachment outside the state directory"
   assert.ok(harness.pathValidationCalls.some((call) => call.candidate === path.resolve(outsidePath)))
 })
 
+test("murmurlane chat service updates model and effort atomically with the outbound message", async (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-chat-runtime-settings-"))
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
+  const harness = createAttachmentHarness({ stateDir })
+
+  await harness.service.handleWebChatMessages({
+    requestId: "request-runtime-settings",
+    messageId: "message-runtime-settings",
+    model: "model-b",
+    effort: "high",
+    messages: [{
+      messageId: "message-runtime-settings",
+      text: "send with one settings update",
+    }],
+  })
+
+  assert.equal(harness.runtimeSettingsCalls.length, 1)
+  assert.equal(harness.runtimeSettingsCalls[0].model, "model-b")
+  assert.equal(harness.runtimeSettingsCalls[0].effort, "high")
+})
+
+test("murmurlane model list returns last-known-good data without waiting for refresh", async (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-chat-model-refresh-"))
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
+  const harness = createAttachmentHarness({ stateDir })
+
+  await harness.service.getWebChatModels({ senderId: "user-1" })
+
+  assert.deepEqual(harness.modelRefreshCalls, [{
+    bindingKey: "workspace-1:account-1:user-1",
+    workspaceRoot: stateDir,
+    refreshCatalog: true,
+    waitForCatalogRefresh: false,
+  }])
+})
+
 test("murmurlane chat service keeps a link attachment without local path validation", async (t) => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-chat-link-"))
   t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
@@ -418,6 +474,8 @@ for (const [activeRuntimeId, targetRuntimeId] of [
 function createAttachmentHarness({ stateDir }) {
   const routeCalls = []
   const pathValidationCalls = []
+  const runtimeSettingsCalls = []
+  const modelRefreshCalls = []
   const sessionStore = {
     buildBindingKey() { return "workspace-1:account-1:user-1" },
     getThreadIdForWorkspace() { return "thread-1" },
@@ -452,6 +510,30 @@ function createAttachmentHarness({ stateDir }) {
           getLatestContext() { return null },
         }
       },
+      async getRuntimeSettings(args) {
+        modelRefreshCalls.push(args)
+        return {
+          runtime: "codex",
+          currentModel: "model-a",
+          currentModelProvider: "",
+          currentModelStatus: "available",
+          currentEffort: "",
+          models: [{ model: "model-a" }],
+          effort: { supported: true, options: ["high"], defaultEffort: "high" },
+          refreshing: true,
+          stale: false,
+          error: "",
+          canRetry: false,
+        }
+      },
+      async updateRuntimeSettings(args) {
+        runtimeSettingsCalls.push(args)
+        return {
+          runtime: "codex",
+          currentModel: args.model || "model-a",
+          currentEffort: args.effort || "",
+        }
+      },
       resolveWorkspaceRoot() { return stateDir },
       async routePreparedInbound(payload) {
         routeCalls.push(payload)
@@ -467,11 +549,18 @@ function createAttachmentHarness({ stateDir }) {
       normalizeWorkspaceRoot,
     },
   })
-  return { service, routeCalls, pathValidationCalls }
+  return {
+    service,
+    routeCalls,
+    pathValidationCalls,
+    runtimeSettingsCalls,
+    modelRefreshCalls,
+  }
 }
 
 function createThreadDeleteHarness({ threadState = null } = {}) {
   const deleteCalls = []
+  const usageDeleteCalls = []
   const service = createMurmurLaneChatService({
     config: {
       workspaceId: "workspace-1",
@@ -505,6 +594,10 @@ function createThreadDeleteHarness({ threadState = null } = {}) {
           getLatestContext() { return null },
         }
       },
+      deleteThreadUsage(threadId) {
+        usageDeleteCalls.push(threadId)
+        return true
+      },
       resolveWorkspaceRoot() { return "D:/study/cyberboss" },
       async routePreparedInbound() { return { accepted: true } },
       findModelByQuery() { return null },
@@ -525,7 +618,7 @@ function createThreadDeleteHarness({ threadState = null } = {}) {
       },
     },
   })
-  return { service, deleteCalls }
+  return { service, deleteCalls, usageDeleteCalls }
 }
 
 function pickAttachmentFields(attachment) {

@@ -47,6 +47,9 @@ function createXiaoyeModules({ config, cyberbossPort } = {}) {
         return null
       }
     },
+    publishRuntimeSettingsUpdated(event) {
+      murmurlane.adapter.publish(event)
+    },
     recordInbound(prepared, context = {}, { publish = true } = {}) {
       try {
         const result = prepared?.provider === "web" && typeof conversation?.recordMergedWebInbound === "function"
@@ -108,6 +111,10 @@ function createMurmurLanePort(cyberbossPort) {
     getActiveAccountId: (...args) => cyberbossPort.getActiveAccountId(...args),
     getRuntimeAdapter: (...args) => cyberbossPort.getRuntimeAdapter(...args),
     getThreadStateStore: (...args) => cyberbossPort.getThreadStateStore(...args),
+    getThreadUsageTotals: (...args) => cyberbossPort.getThreadUsageTotals?.(...args) || null,
+    deleteThreadUsage: (...args) => cyberbossPort.deleteThreadUsage?.(...args) || false,
+    getRuntimeSettings: (...args) => cyberbossPort.getRuntimeSettings?.(...args),
+    updateRuntimeSettings: (...args) => cyberbossPort.updateRuntimeSettings?.(...args),
     resolveWorkspaceRoot: (...args) => cyberbossPort.resolveWorkspaceRoot(...args),
     routePreparedInbound: (...args) => cyberbossPort.routePreparedInbound(...args),
     findModelByQuery: (...args) => cyberbossPort.findModelByQuery(...args),

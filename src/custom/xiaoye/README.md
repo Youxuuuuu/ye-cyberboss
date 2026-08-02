@@ -48,6 +48,10 @@ MurmurLane Chat Service 可使用：
 - `getActiveAccountId`
 - `getRuntimeAdapter`
 - `getThreadStateStore`
+- `getThreadUsageTotals`
+- `deleteThreadUsage`
+- `getRuntimeSettings`
+- `updateRuntimeSettings`
 - `resolveWorkspaceRoot`
 - `routePreparedInbound`
 - `findModelByQuery`
@@ -64,7 +68,7 @@ Xiaoye 组合根另外使用：
 
 新增 Port 方法前，应先确认它代表稳定的跨边界能力，而不是把 `CyberbossApp` 的内部对象逐步暴露出去。
 
-`CyberbossApp` 中保留的固定接入点是：创建、启动和关闭 Xiaoye 组合根；向其转交 Runtime 事件、Inbound Conversation 记录和 Runtime Turn 创建结果；以及把 WebChat Adapter 注册到现有 Channel Router。WebChat 活动目标和线程事件由 MurmurLane 模块维护。
+`CyberbossApp` 中保留的固定接入点是：创建、启动和关闭 Xiaoye 组合根；向其转交 Runtime 事件、Runtime 设置更新事件、Inbound Conversation 记录和 Runtime Turn 创建结果；以及把 WebChat Adapter 注册到现有 Channel Router。设置事件只调用 Xiaoye 组合根公开的窄方法，不直接访问其内部 MurmurLane Adapter。WebChat 活动目标和线程事件由 MurmurLane 模块维护。
 
 ## 兼容性约束
 

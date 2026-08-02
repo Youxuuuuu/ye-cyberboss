@@ -13,13 +13,31 @@ const {
 const { findModelByQuery } = require("./model-catalog");
 const { SessionStore } = require("./session-store");
 const { resolveCodexProjectToolMcpServerConfig } = require("./mcp-config");
+const { RuntimeModelCatalog } = require("../shared/runtime-model-catalog");
 
 function createCodexRuntimeAdapter(config) {
   const sessionStore = new SessionStore({ filePath: config.sessionsFile, runtimeId: "codex" });
   let client = null;
   let readyState = null;
+  let usageThreadId = "";
   const configuredModel = normalizeText(config.codexModel);
   const configuredModelProvider = normalizeText(config.codexModelProvider);
+  const modelCatalog = new RuntimeModelCatalog({
+    sessionStore,
+    async fetchModels() {
+      const runtimeClient = ensureClient();
+      if (!runtimeClient.isReady || !runtimeClient.isTransportReady()) {
+        await runtimeClient.connect();
+        await runtimeClient.initialize();
+      }
+      const response = await runtimeClient.listModels();
+      return Array.isArray(response?.result?.data)
+        ? response.result.data
+        : Array.isArray(response?.data)
+          ? response.data
+          : [];
+    },
+  });
 
   function resolveModel(model = "", storedParams = null) {
     if (configuredModel) {
@@ -64,7 +82,11 @@ function createCodexRuntimeAdapter(config) {
       }
       const runtimeClient = ensureClient();
       return runtimeClient.onMessage((message) => {
-        const event = mapCodexMessageToRuntimeEvent(message);
+        const observedThreadId = extractThreadIdFromParams(message?.params || {});
+        if (observedThreadId) {
+          usageThreadId = observedThreadId;
+        }
+        const event = mapCodexMessageToRuntimeEvent(message, { threadId: usageThreadId });
         if (event || message) {
           listener(event, message);
         }
@@ -72,6 +94,28 @@ function createCodexRuntimeAdapter(config) {
     },
     getSessionStore() {
       return sessionStore;
+    },
+    listAvailableModels(options = {}) {
+      return modelCatalog.list(options);
+    },
+    getEffortCapabilities({ model = "" } = {}) {
+      const catalog = sessionStore.getAvailableModelCatalog();
+      const selectedModel = findModelByQuery(catalog?.models, model);
+      const options = Array.from(new Set(
+        (Array.isArray(selectedModel?.supportedReasoningEfforts)
+          ? selectedModel.supportedReasoningEfforts
+          : [])
+          .map((value) => normalizeText(value).toLowerCase())
+          .filter(Boolean),
+      ));
+      const configuredDefault = normalizeText(selectedModel?.defaultReasoningEffort).toLowerCase();
+      return {
+        supported: options.length > 0,
+        options,
+        defaultEffort: options.includes(configuredDefault)
+          ? configuredDefault
+          : options[0] || "",
+      };
     },
     getTurnCapabilities({ model = "" } = {}) {
       const forcedNativeImageInput = config.codexNativeImageInput;
@@ -96,13 +140,8 @@ function createCodexRuntimeAdapter(config) {
       }
       await runtimeClient.connect();
       await runtimeClient.initialize();
-      const modelResponse = await runtimeClient.listModels().catch(() => null);
-      const models = Array.isArray(modelResponse?.result?.data)
-        ? modelResponse.result.data
-        : [];
-      if (models.length) {
-        sessionStore.setAvailableModelCatalog(models);
-      }
+      const catalog = await modelCatalog.list({ refresh: true });
+      const models = catalog.models;
       readyState = {
         endpoint: config.codexEndpoint || "(spawn)",
         models,
@@ -154,6 +193,7 @@ function createCodexRuntimeAdapter(config) {
     async compactThread({ threadId }) {
       const runtimeClient = ensureClient();
       await this.initialize();
+      usageThreadId = normalizeText(threadId) || usageThreadId;
       return runtimeClient.compactThread({ threadId });
     },
     async refreshThreadInstructions({ threadId, workspaceRoot, model = "", modelProvider = "" }) {
@@ -166,6 +206,7 @@ function createCodexRuntimeAdapter(config) {
         model: desiredModel,
         modelProvider: configuredModelProvider,
       });
+      usageThreadId = normalizeText(threadId) || usageThreadId;
       const completion = waitForTurnCompletion(runtimeClient, threadId);
       await runtimeClient.sendUserMessage({
         threadId,
@@ -180,7 +221,7 @@ function createCodexRuntimeAdapter(config) {
     async sendTextTurn(args) {
       return this.sendTurn(args);
     },
-    async sendTurn({ bindingKey, workspaceRoot, text, attachments = [], metadata = {}, model = "" }) {
+    async sendTurn({ bindingKey, workspaceRoot, text, attachments = [], metadata = {}, model = "", effort = "" }) {
       const runtimeClient = ensureClient();
       await this.initialize();
 
@@ -188,6 +229,7 @@ function createCodexRuntimeAdapter(config) {
       const storedParams = sessionStore.getRuntimeParamsForWorkspace(bindingKey, workspaceRoot);
       const desiredModel = resolveModel(model, storedParams);
       const desiredModelProvider = configuredModelProvider;
+      const desiredEffort = normalizeText(effort) || normalizeText(storedParams.effort);
       if (threadId && !runtimeParamsMatch(storedParams, {
         model: desiredModel,
         modelProvider: desiredModelProvider,
@@ -198,6 +240,7 @@ function createCodexRuntimeAdapter(config) {
       sessionStore.setRuntimeParamsForWorkspace(bindingKey, workspaceRoot, {
         model: desiredModel,
         modelProvider: desiredModelProvider,
+        effort: desiredEffort,
       });
       let outboundText = text;
       if (!threadId) {
@@ -232,17 +275,20 @@ function createCodexRuntimeAdapter(config) {
           sessionStore.setRuntimeParamsForWorkspace(bindingKey, workspaceRoot, {
             model: desiredModel,
             modelProvider: desiredModelProvider,
+            effort: desiredEffort,
           });
           outboundText = buildOpeningTurnText(config, text);
         });
       }
 
+      usageThreadId = threadId;
       const response = await runtimeClient.sendUserMessage({
         threadId,
         text: outboundText,
         attachments,
         model: desiredModel,
         modelProvider: desiredModelProvider,
+        effort: desiredEffort,
         workspaceRoot,
       });
       return {

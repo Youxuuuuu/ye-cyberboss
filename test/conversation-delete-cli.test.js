@@ -6,6 +6,7 @@ const path = require("path")
 const { spawnSync } = require("child_process")
 
 const { ConversationWriter } = require("../src/custom/xiaoye/conversation")
+const { ThreadUsageLedger } = require("../src/core/thread-usage-ledger")
 
 const REPO_ROOT = path.resolve(__dirname, "..")
 
@@ -13,6 +14,7 @@ test("conversation:delete removes one thread through the offline CLI and returns
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-conversation-delete-cli-"))
   t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
   const conversationDir = path.join(stateDir, "conversations")
+  const usageFile = path.join(stateDir, "thread-usage.json")
   const writer = new ConversationWriter({ conversationDir })
   writer.writeRecords([
     record({
@@ -28,6 +30,23 @@ test("conversation:delete removes one thread through the offline CLI and returns
       timestamp: "2026-07-31T01:01:00.000Z",
     }),
   ])
+  const usageLedger = new ThreadUsageLedger({ filePath: usageFile })
+  usageLedger.applyObservation({
+    kind: "message",
+    runtimeId: "claudecode",
+    threadId: "thread-cli-delete",
+    observationId: "message-delete",
+    inputTokens: 12,
+    outputTokens: 3,
+  })
+  usageLedger.applyObservation({
+    kind: "message",
+    runtimeId: "claudecode",
+    threadId: "thread-cli-keep",
+    observationId: "message-keep",
+    inputTokens: 7,
+    outputTokens: 2,
+  })
 
   const result = spawnSync(
     process.execPath,
@@ -64,6 +83,9 @@ test("conversation:delete removes one thread through the offline CLI and returns
     readDay(conversationDir, "2026-07-31").map((entry) => entry.threadId),
     ["thread-cli-keep"],
   )
+  const persistedUsage = new ThreadUsageLedger({ filePath: usageFile })
+  assert.equal(persistedUsage.getThreadUsageTotals("thread-cli-delete"), null)
+  assert.equal(persistedUsage.getThreadUsageTotals("thread-cli-keep")?.totalTokens, 9)
 })
 
 test("terminal help documents the offline conversation delete command", () => {

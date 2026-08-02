@@ -225,6 +225,47 @@ test("runtime correlation events expose protocol-v2 turn identities", () => {
   assert.equal(correlated.canonicalTurnId, "prompt-canonical");
 });
 
+test("runtime usage events keep context snapshots separate from thread totals", () => {
+  const adapter = createWebChatChannelAdapter({
+    config: {
+      stateDir: fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-webchat-usage-")),
+      webChatSenderId: "user-usage",
+      allowedUserIds: ["user-usage"],
+      webChatEnabled: true,
+    },
+  });
+  const contextUsage = {
+    runtimeId: "codex",
+    threadId: "thread-usage",
+    inputTokens: 120,
+    cachedInputTokens: 80,
+    outputTokens: 20,
+    currentTokens: 140,
+    contextWindow: 200_000,
+  };
+  const usageTotals = {
+    inputTokens: 350,
+    outputTokens: 40,
+    cacheReadInputTokens: 280,
+    totalTokens: 390,
+    cacheHitRate: 0.8,
+  };
+
+  const published = adapter.publishRuntimeEvent({
+    type: "runtime.context.updated",
+    payload: {
+      ...contextUsage,
+      contextSnapshot: contextUsage,
+      usageTotals,
+    },
+  });
+
+  assert.equal(published.kind, "usage");
+  assert.deepEqual(published.contextUsage, contextUsage);
+  assert.deepEqual(published.usageTotals, usageTotals);
+  assert.equal(Object.hasOwn(published, "usage"), false);
+});
+
 test("webchat publishes silent runtime exits as lifecycle events without visible error text", () => {
   const adapter = createWebChatChannelAdapter({
     config: {
