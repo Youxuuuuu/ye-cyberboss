@@ -9,7 +9,7 @@
 - [`docs/architecture.md`](architecture.md)
 - [`AGENTS.md`](../AGENTS.md)
 - [`CONTEXT.md`](../CONTEXT.md)
-- [`murmurlane-stack/docs/repository-map.md`](../../murmurlane-stack/docs/repository-map.md)
+- 共享仓库地图：本地 [`../murmurlane-stack/docs/repository-map.md`](../../murmurlane-stack/docs/repository-map.md)；GitHub：[main](https://github.com/Youxuuuuu/murmurlane-stack/blob/main/docs/repository-map.md)
 
 ## 仓库与维护分支
 
@@ -71,7 +71,9 @@ Initial Upstream Base 与 Latest Upstream Sync Base 当前同为 `373ab17…`，
 5. Runtime 或 Channel 特有问题进入对应 Adapter。
 6. 只有权威跨渠道或跨 Runtime 语义才考虑 Core。
 
-修改 Core 或上游既有关键文件前，共享 Spec 必须标记 `Core change: required`，并记录拟修改文件、Core 所有权依据、现有 Port/Xiaoye/Adapter 无法正确承载的原因、上游同步风险、兼容与回滚方案和验证边界。不满足时停止实施，提出不动本体的替代方案。
+修改 Core 或上游既有关键文件前，共享 Spec 必须记录 `Core change: none | required`、`Core decision: not-applicable | pending | approved | rejected`、`Approved by:`、`Decision date:` 与 `Core files:`，以及 Core 所有权依据、现有 Port/Xiaoye/Adapter 无法正确承载的原因、上游同步风险、兼容与回滚方案和验证边界。
+
+`Core change: none` 时，`Core decision` 必须为 `not-applicable`。`required + pending` 时不得修改 Core，只能补充分析与替代方案并等待决定；只有用户或维护者可以设为 `approved`，仅在批准后列出和修改 `Core files`。`rejected` 时采用替代方案或记录 `wontfix`。
 
 必须修改 Core 时，优先新增职责单一的深模块，通过窄 interface 暴露；不得把领域算法直接堆入 `app.js`，也不得顺带重构无关上游代码。
 
@@ -127,6 +129,10 @@ Initial Upstream Base 与 Latest Upstream Sync Base 当前同为 `373ab17…`，
 - 上游提交范围：Not yet verified
 - 集成方式：merge | rebase | 分阶段迁移 | Not yet verified
 - Core change：none | required | Not yet verified
+- Core decision：not-applicable | pending | approved | rejected | Not yet verified
+- 批准人：Not yet verified
+- 决策日期：Not yet verified
+- Core files：Not yet verified
 - 相关 Spec：Not yet verified
 - 冲突文件：Not yet verified
 - 冲突决策：Not yet verified
@@ -138,4 +144,3 @@ Initial Upstream Base 与 Latest Upstream Sync Base 当前同为 `373ab17…`，
 - 最终提交：Not yet verified
 - 未完成事项：Not yet verified
 ```
-

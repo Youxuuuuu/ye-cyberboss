@@ -8,7 +8,7 @@
 - `AGENTS.md`：修改与跨仓库协作约束。
 - `docs/adr/`：已经接受、不可静默改变的架构决策。
 - `src/custom/xiaoye/README.md`：Xiaoye 扩展目录与 Port 摘要。
-- MurmurLane 仓库中的 `docs/architecture/current-architecture.md`：MurmurLane 独立项目的消费侧架构。
+- MurmurLane 消费侧架构：本地 [`../MurmurLane/docs/architecture/current-architecture.md`](../../MurmurLane/docs/architecture/current-architecture.md)；GitHub：[dev/ins-chat](https://github.com/Youxuuuuu/MurmurLane/blob/dev/ins-chat/docs/architecture/current-architecture.md)。
 
 需求 tracker 和实施 `spec.md` 记录讨论与验收，不代替当前架构文档。
 
@@ -166,7 +166,7 @@ normalizeWorkspaceRoot
 | 页面 View Model 与 Commands | MurmurLane Conversation Workspace | 否 |
 | 页面视觉、手势和动画 | MurmurLane View | 否 |
 
-修改 Conversation、WebChat 契约、Thread/Turn 身份或媒体结构时，必须同时检查 MurmurLane 的类型、对账和展示消费者。
+修改 Conversation、WebChat 契约、Thread/Turn 身份或媒体结构时，必须同时检查 MurmurLane 的类型、对账和展示消费者；判定与发布规则见本地 [`../murmurlane-stack/docs/repository-map.md`](../../murmurlane-stack/docs/repository-map.md)；GitHub：[main](https://github.com/Youxuuuuu/murmurlane-stack/blob/main/docs/repository-map.md)。
 
 ## 禁止依赖与旁路
 
