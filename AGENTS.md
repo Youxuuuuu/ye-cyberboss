@@ -30,7 +30,7 @@
 - 共享 Tracker：`../murmurlane-stack/tracker`。
 - 同时影响 Cyberboss 与 MurmurLane 的任务使用共享 tracker，并标记 `Repo: both`。
 - 跨仓库任务开始前依次读取 `docs/architecture.md`、`../MurmurLane/docs/architecture/current-architecture.md`、`../murmurlane-stack/docs/repository-map.md` 和对应 feature 的 `spec.md`。
-- 问题归属不明时读取 `../MurmurLane/docs/architecture/cross-repo-diagnosis.md`。
+- 问题归属不明时读取 `../murmurlane-stack/docs/workflow/cross-repo-diagnosis.md`。
 - Cyberboss 仍以自身 `CONTEXT.md` 和 `docs/adr/` 为领域权威。
 - 先确定哪一侧拥有数据或行为，再在所有者处修改；避免在两边各自实现一套相同规范化逻辑。
 - 跨仓库契约变化必须写明兼容策略、可恢复字段和不可恢复字段。
@@ -38,6 +38,8 @@
 
 ## 修改原则
 
+- 涉及 MurmurLane、WebChat、Conversation 或页面功能时，默认不修改 `src/core/` 和上游既有主体文件；优先检查 MurmurLane、`src/custom/xiaoye/`、现有 Port 与 Runtime/Channel Adapter。
+- 修改 `src/core/` 或上游既有关键文件前，对应共享 Spec 必须标记 `Core change: required`，列出文件、Core 所有权依据、现有扩展 seam 无法承载的原因、上游同步风险、回滚与验证方案；不满足时停止实施并提出不动本体的替代方案。
 - 优先小范围、可验证的修改。不要借功能修改顺带重构无关模块。
 - 设计新 `interface` 时追求深模块：调用方只学习少量稳定规则，复杂实现留在模块内部。
 - 只有存在真实变化点时才建立 `seam`；不要为单一实现增加纯转发层。
