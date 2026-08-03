@@ -38,6 +38,7 @@
 
 ## 修改原则
 
+- 修改上游既有文件或同步 `upstream` 前，必须读取 `docs/fork-maintenance.md`。
 - 涉及 MurmurLane、WebChat、Conversation 或页面功能时，默认不修改 `src/core/` 和上游既有主体文件；优先检查 MurmurLane、`src/custom/xiaoye/`、现有 Port 与 Runtime/Channel Adapter。
 - 修改 `src/core/` 或上游既有关键文件前，对应共享 Spec 必须标记 `Core change: required`，列出文件、Core 所有权依据、现有扩展 seam 无法承载的原因、上游同步风险、回滚与验证方案；不满足时停止实施并提出不动本体的替代方案。
 - 优先小范围、可验证的修改。不要借功能修改顺带重构无关模块。
