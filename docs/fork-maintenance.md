@@ -73,7 +73,15 @@ Initial Upstream Base 与 Latest Upstream Sync Base 当前同为 `373ab17…`，
 
 修改 Core 或上游既有关键文件前，共享 Spec 必须记录 `Core change: none | required`、`Core decision: not-applicable | pending | approved | rejected`、`Approved by:`、`Decision date:` 与 `Core files:`，以及 Core 所有权依据、现有 Port/Xiaoye/Adapter 无法正确承载的原因、上游同步风险、兼容与回滚方案和验证边界。
 
-`Core change: none` 时，`Core decision` 必须为 `not-applicable`。`required + pending` 时不得修改 Core，只能补充分析与替代方案并等待决定；只有用户或维护者可以设为 `approved`，仅在批准后列出和修改 `Core files`。`rejected` 时采用替代方案或记录 `wontfix`。
+`Core change: none` 时，`Core decision` 必须为 `not-applicable`。
+
+`Core change: required` 时，智能体必须在 `Core decision: pending` 阶段先列出拟修改的 `Core files`、所有权依据、现有 seam 无法承载的原因、上游风险、兼容、回滚和验证方案。
+
+`required + pending` 时不得修改任何 Core 文件。只有用户或维护者可以将 `Core decision` 改为 `approved`。批准仅覆盖当时已经列出的 `Core files`。
+
+实施中如需增加或替换 Core 文件，必须把 `Core decision` 重新改为 `pending`，在 Comments 追加原因并重新获得批准。
+
+`rejected` 时不得修改 Core，应采用替代方案或记录 `wontfix`。
 
 必须修改 Core 时，优先新增职责单一的深模块，通过窄 interface 暴露；不得把领域算法直接堆入 `app.js`，也不得顺带重构无关上游代码。
 

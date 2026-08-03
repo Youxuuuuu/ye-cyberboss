@@ -9,14 +9,5 @@ firmware/
 .codex/*
 tmp-*
 examples/mcp/
-docs/*
-!docs/agents/
-!docs/agents/**
-!docs/adr/
-!docs/adr/**
-!docs/xiaoye-refactor-baseline.md
-!docs/fork-maintenance.md
-!docs/architecture/
-docs/architecture/*
-!docs/architecture/cross-repo-diagnosis.md
+docs/images/*
 templates/*

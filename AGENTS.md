@@ -43,7 +43,11 @@
 - 修改上游既有文件或同步 `upstream` 前，必须读取 `docs/fork-maintenance.md`。
 - 涉及 MurmurLane、WebChat、Conversation 或页面功能时，默认不修改 `src/core/` 和上游既有主体文件；优先检查 MurmurLane、`src/custom/xiaoye/`、现有 Port 与 Runtime/Channel Adapter。
 - 修改 `src/core/` 或上游既有关键文件前，对应共享 Spec 必须记录 `Core change: none | required`、`Core decision: not-applicable | pending | approved | rejected`、批准人、日期、Core 文件、Core 所有权依据、现有 seam 无法承载的原因、上游风险、兼容/回滚与验证方案。
-- `Core change: none` 时 `Core decision` 必须为 `not-applicable`。`required + pending` 时不得修改 Core，只能补充分析和替代方案；只有用户或维护者可设为 `approved`，获批后才可填写和修改 Core 文件。`rejected` 时采用替代方案或记录 `wontfix`。
+- `Core change: none` 时，`Core decision` 必须为 `not-applicable`。
+- `Core change: required` 时，智能体必须在 `Core decision: pending` 阶段先列出拟修改的 `Core files`、所有权依据、现有 seam 无法承载的原因、上游风险、兼容、回滚和验证方案。
+- `required + pending` 时不得修改任何 Core 文件。只有用户或维护者可以将 `Core decision` 改为 `approved`。批准仅覆盖当时已经列出的 `Core files`。
+- 实施中如需增加或替换 Core 文件，必须把 `Core decision` 重新改为 `pending`，在 Comments 追加原因并重新获得批准。
+- `rejected` 时不得修改 Core，应采用替代方案或记录 `wontfix`。
 - 优先小范围、可验证的修改。不要借功能修改顺带重构无关模块。
 - 设计新 `interface` 时追求深模块：调用方只学习少量稳定规则，复杂实现留在模块内部。
 - 只有存在真实变化点时才建立 `seam`；不要为单一实现增加纯转发层。
