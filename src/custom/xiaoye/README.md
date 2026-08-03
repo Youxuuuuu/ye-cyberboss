@@ -79,7 +79,7 @@ Xiaoye 组合根另外使用：
 
 ## 问题跟踪
 
-README 只描述当前模块 interface，不保存会过期的问题快照。已知问题和实施状态记录在共享工程 tracker：`D:\study\.cyberboss\engineering-tracker`。
+README 只描述当前模块 interface，不保存会过期的问题快照。已知问题和实施状态记录在共享工程 Tracker：[`murmurlane-stack/tracker`](../../../../murmurlane-stack/tracker)。
 
 ## 扩展方式
 

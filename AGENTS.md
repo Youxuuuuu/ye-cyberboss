@@ -26,7 +26,12 @@
 
 ## 跨仓库工作
 
+- 共享工作区：`../murmurlane-stack`。
+- 共享 Tracker：`../murmurlane-stack/tracker`。
 - 同时影响 Cyberboss 与 MurmurLane 的任务使用共享 tracker，并标记 `Repo: both`。
+- 跨仓库任务开始前依次读取 `docs/architecture.md`、`../MurmurLane/docs/architecture/current-architecture.md`、`../murmurlane-stack/docs/repository-map.md` 和对应 feature 的 `spec.md`。
+- 问题归属不明时读取 `../MurmurLane/docs/architecture/cross-repo-diagnosis.md`。
+- Cyberboss 仍以自身 `CONTEXT.md` 和 `docs/adr/` 为领域权威。
 - 先确定哪一侧拥有数据或行为，再在所有者处修改；避免在两边各自实现一套相同规范化逻辑。
 - 跨仓库契约变化必须写明兼容策略、可恢复字段和不可恢复字段。
 - Chat Gateway、Extension Loader、Channel Registry 等仍是候选设计；在 ADR 确认前不得当作既定架构。
@@ -49,11 +54,11 @@
 
 ### 任务跟踪
 
-Cyberboss 和 MurmurLane 共用本地 Markdown 任务跟踪目录：`D:\study\.cyberboss\engineering-tracker`。具体规则见 `docs/agents/issue-tracker.md`。
+Cyberboss 和 MurmurLane 共用 `../murmurlane-stack/tracker`。具体规则见 `../murmurlane-stack/docs/workflow/issue-tracker.md`，仓库内入口见 `docs/agents/issue-tracker.md`。
 
 ### 任务状态
 
-共享任务采用五种标准状态，具体映射见 `docs/agents/triage-labels.md`。
+共享任务采用五种标准状态，权威说明见 `../murmurlane-stack/docs/workflow/triage-status.md`，仓库内入口见 `docs/agents/triage-labels.md`。
 
 ### 领域文档
 

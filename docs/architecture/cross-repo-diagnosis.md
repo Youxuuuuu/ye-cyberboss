@@ -139,7 +139,7 @@ Cyberboss 是 Inbound Turn、Runtime 调度、线程状态和 Conversation Recor
 
 跨仓库任务使用共享 tracker：
 
-`D:\study\.cyberboss\engineering-tracker`
+[`murmurlane-stack/tracker`](../../../murmurlane-stack/tracker)
 
 任务至少记录：
 
