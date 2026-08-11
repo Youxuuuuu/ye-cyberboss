@@ -349,6 +349,10 @@ test("claudecode assistant events map usage into context snapshots", () => {
     cacheReadInputTokens: 13535,
     outputTokens: 1509,
     currentTokens: 27201,
+    latestInputTokens: 7,
+    latestCacheCreationInputTokens: 12150,
+    latestCacheReadInputTokens: 13535,
+    latestOutputTokens: 1509,
   });
   assert.deepEqual(event.payload.usageObservation, {
     kind: "message",
@@ -362,7 +366,37 @@ test("claudecode assistant events map usage into context snapshots", () => {
   });
 });
 
-test("claudecode result usage replaces zero assistant usage for the same turn", () => {
+test("claudecode effective context window follows the standard and [1m] model variants", () => {
+  const raw = {
+    message: {
+      id: "message-window",
+      usage: {
+        input_tokens: 100,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        output_tokens: 10,
+      },
+    },
+  };
+  const message = {
+    type: "context.updated",
+    sessionId: "thread-window",
+    messageId: "message-window",
+  };
+
+  assert.equal(
+    mapClaudeCodeMessageToRuntimeEvent(message, raw, { model: "deepseek-v4" })
+      .payload.contextWindow,
+    200_000,
+  );
+  assert.equal(
+    mapClaudeCodeMessageToRuntimeEvent(message, raw, { model: "deepseek-v4[1m]" })
+      .payload.contextWindow,
+    1_000_000,
+  );
+});
+
+test("claudecode result usage updates totals without replacing assistant context", () => {
   const client = new ClaudeCodeProcessClient({
     command: "claude",
     cwd: process.cwd(),
@@ -371,12 +405,10 @@ test("claudecode result usage replaces zero assistant usage for the same turn", 
   client.activeThreadId = "thread-result-usage";
   client.pendingTurnId = "turn-result-usage";
 
-  const contextEvents = [];
+  const runtimeEvents = [];
   client.onMessage((message, raw) => {
     const mapped = mapClaudeCodeMessageToRuntimeEvent(message, raw);
-    if (mapped?.type === "runtime.context.updated") {
-      contextEvents.push(mapped);
-    }
+    if (mapped) runtimeEvents.push(mapped);
   });
 
   client.handleAssistant({
@@ -404,8 +436,14 @@ test("claudecode result usage replaces zero assistant usage for the same turn", 
     },
   });
 
-  assert.equal(contextEvents.length, 2);
-  assert.deepEqual(contextEvents.at(-1).payload.usageObservation, {
+  assert.equal(
+    runtimeEvents.filter((event) => event.type === "runtime.context.updated").length,
+    2,
+  );
+  const usageEvent = runtimeEvents[1];
+  assert.equal(usageEvent.payload.currentTokens, 0);
+  assert.equal(usageEvent.payload.latestInputTokens, 39_461);
+  assert.deepEqual(usageEvent.payload.usageObservation, {
     kind: "message",
     runtimeId: "claudecode",
     threadId: "thread-result-usage",
@@ -415,6 +453,102 @@ test("claudecode result usage replaces zero assistant usage for the same turn", 
     cacheReadInputTokens: 12_000,
     outputTokens: 15,
   });
+});
+
+test("claudecode result aggregate updates totals without replacing active context", () => {
+  const client = new ClaudeCodeProcessClient({
+    command: "claude",
+    cwd: process.cwd(),
+  });
+  client.sessionId = "thread-context-usage";
+  client.activeThreadId = "thread-context-usage";
+  client.pendingTurnId = "turn-context-usage";
+
+  const runtimeEvents = [];
+  client.onMessage((message, raw) => {
+    const mapped = mapClaudeCodeMessageToRuntimeEvent(message, raw);
+    if (mapped) runtimeEvents.push(mapped);
+  });
+
+  client.handleAssistant({
+    type: "assistant",
+    message: {
+      id: "message-context-usage",
+      content: [{ type: "text", text: "OK" }],
+      usage: {
+        input_tokens: 100,
+        cache_creation_input_tokens: 20_000,
+        cache_read_input_tokens: 80_000,
+        output_tokens: 50,
+      },
+    },
+  });
+  client.handleResult({
+    type: "result",
+    session_id: "thread-context-usage",
+    result: "OK",
+    num_turns: 4,
+    usage: {
+      input_tokens: 1_000,
+      cache_creation_input_tokens: 200_000,
+      cache_read_input_tokens: 400_000,
+      output_tokens: 500,
+    },
+  });
+
+  assert.deepEqual(runtimeEvents.map((event) => event.type), [
+    "runtime.context.updated",
+    "runtime.context.updated",
+    "runtime.turn.completed",
+  ]);
+  assert.equal(runtimeEvents[0].payload.currentTokens, 100_150);
+  assert.equal(runtimeEvents[1].payload.currentTokens, 100_150);
+  assert.equal(runtimeEvents[1].payload.usageObservation.inputTokens, 1_000);
+  assert.equal(runtimeEvents[1].payload.latestCacheReadInputTokens, 400_000);
+});
+
+test("claudecode single-call result restores context when assistant usage is zero", () => {
+  const client = new ClaudeCodeProcessClient({
+    command: "claude",
+    cwd: process.cwd(),
+  });
+  client.sessionId = "thread-single-call-context";
+  client.activeThreadId = "thread-single-call-context";
+  client.pendingTurnId = "turn-single-call-context";
+
+  const contextEvents = [];
+  client.onMessage((message, raw) => {
+    const mapped = mapClaudeCodeMessageToRuntimeEvent(message, raw);
+    if (mapped?.type === "runtime.context.updated") contextEvents.push(mapped);
+  });
+
+  client.handleAssistant({
+    type: "assistant",
+    message: {
+      id: "message-single-call-context",
+      content: [{ type: "text", text: "OK" }],
+      usage: {
+        input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        output_tokens: 0,
+      },
+    },
+  });
+  client.handleResult({
+    type: "result",
+    session_id: "thread-single-call-context",
+    result: "OK",
+    num_turns: 1,
+    usage: {
+      input_tokens: 224,
+      cache_creation_input_tokens: 10_000,
+      cache_read_input_tokens: 98_000,
+      output_tokens: 46,
+    },
+  });
+
+  assert.equal(contextEvents.at(-1).payload.currentTokens, 108_270);
 });
 
 test("claudecode adapter dispatches turns only after a real session id is available", async () => {

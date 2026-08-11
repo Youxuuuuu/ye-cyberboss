@@ -190,7 +190,7 @@ What these do:
 - `CYBERBOSS_CLAUDE_MODEL`
   Set the default Claude model.
 - `CYBERBOSS_CLAUDE_CONTEXT_WINDOW`
-  Set Claude's effective context window so `/status` can show an approximate context usage line.
+  Optional manual approximation used only by the terminal `/status` context line. It does not change ClaudeCode's real window and is not used as MurmurLane's per-model maximum; MurmurLane uses ClaudeCode's effective 200k or explicit `[1m]` 1M variant.
 - `CYBERBOSS_CLAUDE_PERMISSION_MODE`
   Set Claude's permission mode before the bridge starts.
 - `CYBERBOSS_CLAUDE_DISABLE_VERBOSE`

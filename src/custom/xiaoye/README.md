@@ -6,6 +6,7 @@
 
 - `index.js`：自定义模块组合根，装配 Conversation 与 MurmurLane，并承接少量 Runtime、Inbound 接入。
 - `conversation/`：从渠道输入或 Runtime 原始记录派生、规范化并持久化 Conversation Record。
+- `voice/`：Voice Asset、音频探测、Qwen 输入理解、MiniMax/Mossland 合成、Voice Profile 与 Generation 的领域模块；不拥有页面播放或 Runtime Core。
 - `murmurlane/`：MurmurLane 的服务端桥接边界。
 - `murmurlane/chat-service.js`：身份、状态、模型、线程选择和消息提交等聊天应用行为。
 - `murmurlane/webchat/`：稳定的 HTTP、SSE、上传、媒体访问与请求幂等传输。
@@ -17,6 +18,7 @@ CyberbossApp
   └─ cyberbossPort
       └─ custom/xiaoye
           ├─ conversation
+          ├─ voice
           └─ murmurlane
               ├─ chat-service
               └─ webchat
@@ -40,6 +42,8 @@ MurmurLane WebChat
 
 Chat Service 只能把消息交回 Cyberboss 现有入站流程，不得绕过 Runtime 直接写 Conversation。
 
+语音输入在原音频永久落盘并得到可提交 transcript 后，仍通过 `routePreparedInbound` 进入同一 Runtime；Assistant Voice Message 与 Speech Rendition 则由 `voice/` 生成永久 Asset，再由 Chat Service 与 Conversation seam 投影。Provider Adapter 不直接写 Conversation，也不拥有 WebChat 身份。
+
 ## Cyberboss Port interface
 
 MurmurLane Chat Service 必需使用：
@@ -58,6 +62,13 @@ MurmurLane Chat Service 必需使用：
 - `normalizeWorkspaceRoot`
 
 `resolveWeixinAccount` 与 `getActiveAccountId` 是现有身份兼容能力，不属于 Runtime Settings interface。
+
+WebChat `/api/chat/status` 与 Usage SSE 分开传输：
+
+- `contextUsage`：当前 Thread 最近一次模型调用的进程内 Runtime Context Snapshot，包含当前占用、最近一轮明细和 Runtime 实际窗口；不得用 Thread 累计值回退。
+- `usageTotals`：`ThreadUsageLedger` 持久化的当前 Thread 累计输入、输出、缓存读取和命中率。
+
+Chat Service 只转交这两个 Cyberboss 事实，不累计、不估算，也不在 Cyberboss 重启后从 Conversation 或 Raw Session 恢复 Context。
 
 Xiaoye 组合根另外使用：
 
@@ -80,6 +91,8 @@ Xiaoye 组合根另外使用：
 ## 问题跟踪
 
 README 只描述当前模块 interface，不保存会过期的问题快照。已知问题和实施状态记录在共享工程 Tracker：本地 [`../murmurlane-stack/tracker`](../../../../murmurlane-stack/tracker)；GitHub：[main](https://github.com/Youxuuuuu/murmurlane-stack/tree/main/tracker)。
+
+WebChat 语音的 `.env` 示例、Provider 差异、重启和浏览器边界见 [`docs/webchat-voice.md`](../../../docs/webchat-voice.md)。
 
 ## 扩展方式
 

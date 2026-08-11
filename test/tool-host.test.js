@@ -298,6 +298,24 @@ test("tool host descriptions include schema summary for models that only surface
   assert.match(timelineWrite.description, /events: \{/);
 });
 
+test("Assistant voice tool exposes the complete Speech Delivery Plan schema", () => {
+  const host = createHost();
+  const voiceTool = host.listTools().find((tool) => tool.name === "cyberboss_webchat_send_voice");
+  const plan = voiceTool.inputSchema.properties.speechDeliveryPlan;
+
+  assert.deepEqual(plan.required, ["schemaVersion", "version"]);
+  assert.ok(plan.properties.emotion);
+  assert.ok(plan.properties.speedOffset);
+  assert.ok(plan.properties.volumeOffset);
+  assert.ok(plan.properties.pitchOffset);
+  assert.ok(plan.properties.pauses.items.properties.afterCharacter);
+  assert.ok(plan.properties.pauses.items.properties.durationSeconds);
+  assert.ok(plan.properties.soundTags.items.properties.afterCharacter);
+  assert.ok(plan.properties.soundTags.items.properties.tag);
+  assert.match(voiceTool.description, /speedOffset/);
+  assert.match(voiceTool.description, /soundTags/);
+});
+
 test("tool host exposes whereabouts tools from the external dependency", async () => {
   const host = createHost();
   const tools = host.listTools();

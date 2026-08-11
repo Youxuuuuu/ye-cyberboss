@@ -12,6 +12,8 @@
 
 需求 tracker 和实施 `spec.md` 记录讨论与验收，不代替当前架构文档。
 
+WebChat 语音的运行配置与 Provider 能力差异见 [`webchat-voice.md`](webchat-voice.md)。
+
 ## 一句话架构
 
 > Cyberboss Core 拥有 Channel、Inbound Turn、Thread、Runtime、Runtime Settings 与 Thread Usage；`src/custom/xiaoye/conversation/` 拥有派生 Conversation Record 的生成与持久化；Xiaoye 是扩展能力组合根；MurmurLane 通过 WebChat 和 Conversation 契约消费结果，不拥有 Runtime 权威状态。
@@ -34,6 +36,7 @@
 | Conversation Record 生成和持久化 | `src/custom/xiaoye/conversation/` |
 | WebChat 应用行为 | `src/custom/xiaoye/murmurlane/chat-service.js` |
 | WebChat HTTP、SSE、上传和幂等 | `src/custom/xiaoye/murmurlane/webchat/` |
+| Voice Asset、输入理解、语音合成与生成记录 | `src/custom/xiaoye/voice/` |
 | 自定义能力装配 | `src/custom/xiaoye/index.js` |
 | Conversation 与 WebChat 的页面消费 | 独立 MurmurLane 项目 |
 
@@ -53,6 +56,10 @@ CyberbossApp
 ├─ StreamDelivery
 └─ Xiaoye Composition Root
    ├─ Conversation
+   ├─ Voice
+   │  ├─ Asset Store / Audio Probe
+   │  ├─ Input Understanding
+   │  └─ Synthesis / Profile / Generation
    └─ MurmurLane Module
       ├─ Chat Service
       └─ WebChat Transport
@@ -114,6 +121,34 @@ Runtime 权威 Usage
 
 Runtime Context Snapshot 与 Thread Usage Totals 是两个不同事实：前者表示最近 Runtime Context，后者表示单个 Thread 自统计边界开始的累计真实用量。Conversation Archive 和 MurmurLane 都不推断、估算或持久化第二份权威 Totals。
 
+Runtime Adapter 负责把两类 Runtime 的真实 Token 事件规范化：
+
+- ClaudeCode 的最后一条非零 assistant Usage 表示最后一次模型调用的活动 Context；最终 Result 表示本轮 Usage。只有 assistant Usage 全为 0 且 `num_turns = 1` 时，Result 才能安全回退为活动 Context；多调用 Result 不得覆盖 Context。
+- Codex 同时兼容旧 `event_msg/token_count` 和 `thread/tokenUsage/updated` 通知；`last_token_usage` / `lastTokenUsage` 形成 Context Snapshot，`total_token_usage` / `totalTokenUsage` 形成 Ledger Observation。
+- Context Window 由 Runtime Adapter 提供：Codex 使用 Runtime 报告值；ClaudeCode 普通模型标识按 200k，显式 `[1m]` 模型按 1M。该值表达 ClaudeCode 实际采用的窗口，不冒充第三方 Provider 原生上限。
+
+Runtime Context Snapshot 当前由 `ThreadStateStore` 保存在进程内，不写入 `thread-usage.json`。Cyberboss 重启后，在对应 Thread 出现下一笔真实 Runtime Usage 前 Context 可以为空或为 0；只有 Thread Usage Totals 跨重启恢复。
+
+### WebChat 异步语音
+
+```text
+MurmurLane Voice Draft（页面内存）
+→ WebChat Voice Command
+→ Voice Asset Store 永久保存原音频
+→ SiliconFlow Qwen3 Omni transcript / affect
+→ transcript 门控、复核或重试
+→ routePreparedInbound → Runtime
+→ Live / Canonical meta.voiceMessage
+
+Assistant send_voice / Speech Rendition
+→ 全局 Voice Profile + Speech Delivery Plan
+→ 显式 MiniMax 或 Mossland Synthesis Adapter
+→ 完整音频校验与永久 Asset
+→ Live / Canonical Voice Message 或原文字 Record 的 speechRendition
+```
+
+语音领域规则位于 Xiaoye seam，不修改 Cyberboss Core。Provider 只产生转写、观察或音频；Voice Message、Speech Rendition、资产路径、生成身份、失败状态和 Conversation 表达仍由 Cyberboss 拥有。Synthesis Provider 不自动 fallback：MiniMax 映射结构化表演参数；Mossland 当前只接收原始文字、voice id、模型版本和输出格式。两个 Adapter 都在完整音频落盘后发布，不提供边生成边播放的流式契约。
+
 ## 持久数据
 
 ```text
@@ -124,9 +159,14 @@ Cyberboss State Directory
 │  └─ Runtime Model Catalog Last-known-good
 ├─ thread-usage.json
 │  └─ Thread Usage Ledger
-└─ conversations/
+├─ conversations/
    └─ Derived Conversation JSONL
+└─ MLane/voice/
+   ├─ self/<YYYY>/<MM>/
+   └─ threads/<threadId>/<YYYY>/<MM>/
 ```
+
+当前没有独立持久化 Runtime Context Snapshot 的状态文件；MurmurLane 也不从 Raw Session 或 Conversation Archive 反推该值。
 
 Codex 与 ClaudeCode 的 Raw Session Record 是只读来源。Conversation JSONL 是可重建的派生记录；只有 `src/custom/xiaoye/conversation/` 可以写入。
 
@@ -163,6 +203,7 @@ normalizeWorkspaceRoot
 | WebChat HTTP/SSE/上传能力 | `custom/xiaoye/murmurlane/webchat/` | 否 |
 | MurmurLane 聊天应用行为 | `custom/xiaoye/murmurlane/chat-service.js` | 仅在缺少稳定 Port 时 |
 | Conversation 字段、媒体和解析 | `custom/xiaoye/conversation/` | 通常否 |
+| 用户语音输入、Voice Asset 与 Speech Provider | `custom/xiaoye/voice/` + `custom/xiaoye/murmurlane/` | 否 |
 | 页面 View Model 与 Commands | MurmurLane Conversation Workspace | 否 |
 | 页面视觉、手势和动画 | MurmurLane View | 否 |
 

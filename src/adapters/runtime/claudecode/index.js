@@ -109,7 +109,9 @@ function createClaudeCodeRuntimeAdapter(config) {
         }
         return;
       }
-      const mapped = mapClaudeCodeMessageToRuntimeEvent(event, raw);
+      const mapped = mapClaudeCodeMessageToRuntimeEvent(event, raw, {
+        model: client.model || desiredModel,
+      });
       if (mapped?.payload && !mapped.payload.workspaceRoot) {
         mapped.payload.workspaceRoot = normalizedWorkspaceRoot;
       }

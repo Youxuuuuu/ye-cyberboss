@@ -7,13 +7,18 @@ const {
 
 const RUNTIME_PROCESS_EXIT_NOISE = "❌ Runtime process exited unexpectedly";
 
-function mapClaudeCodeMessageToRuntimeEvent(message, raw) {
+function mapClaudeCodeMessageToRuntimeEvent(message, raw, { model = "" } = {}) {
   const type = message?.type;
   switch (type) {
     case "context.updated":
       return {
         type: "runtime.context.updated",
-        payload: normalizeClaudeContextPayload(message, raw),
+        payload: normalizeClaudeContextPayload(message, raw, { model }),
+      };
+    case "usage.updated":
+      return {
+        type: "runtime.context.updated",
+        payload: normalizeClaudeContextPayload(message, raw, { model }),
       };
     case "turn.started":
       return {
@@ -148,12 +153,22 @@ function truncateCommand(text, maxLines = 6, maxLineLength = 100) {
   return result;
 }
 
-function normalizeClaudeContextPayload(message, raw) {
-  const usage = raw?.message?.usage && typeof raw.message.usage === "object"
-    ? raw.message.usage
-    : raw?.usage && typeof raw.usage === "object"
-      ? raw.usage
+function normalizeClaudeContextPayload(message, raw, { model = "" } = {}) {
+  const isTurnAggregate = message?.type === "usage.updated";
+  const hasReportedContext = message?.contextUsage && typeof message.contextUsage === "object";
+  const canUseSingleCallResult = isTurnAggregate
+    && !hasReportedContext
+    && Number(message?.numTurns) === 1
+    && raw?.usage
+    && typeof raw.usage === "object";
+  const contextUsage = isTurnAggregate
+    ? (hasReportedContext ? message.contextUsage : canUseSingleCallResult ? raw.usage : {})
+    : raw?.message?.usage && typeof raw.message.usage === "object"
+      ? raw.message.usage
       : (message?.usage && typeof message.usage === "object" ? message.usage : {});
+  const usage = isTurnAggregate && raw?.usage && typeof raw.usage === "object"
+    ? raw.usage
+    : contextUsage;
   const runtimeId = "claudecode";
   const threadId = normalizeString(message?.sessionId);
   const observationId = normalizeString(
@@ -162,10 +177,10 @@ function normalizeClaudeContextPayload(message, raw) {
       || message?.messageId
       || message?.message_id
   );
-  const inputTokens = numberOrZero(usage.input_tokens);
-  const cacheCreationInputTokens = numberOrZero(usage.cache_creation_input_tokens);
-  const cacheReadInputTokens = numberOrZero(usage.cache_read_input_tokens);
-  const outputTokens = numberOrZero(usage.output_tokens);
+  const inputTokens = numberOrZero(contextUsage.input_tokens);
+  const cacheCreationInputTokens = numberOrZero(contextUsage.cache_creation_input_tokens);
+  const cacheReadInputTokens = numberOrZero(contextUsage.cache_read_input_tokens);
+  const outputTokens = numberOrZero(contextUsage.output_tokens);
   const contextSnapshot = {
     runtimeId,
     threadId,
@@ -174,6 +189,11 @@ function normalizeClaudeContextPayload(message, raw) {
     cacheReadInputTokens,
     outputTokens,
     currentTokens: inputTokens + cacheCreationInputTokens + cacheReadInputTokens + outputTokens,
+    latestInputTokens: numberOrZero(usage.input_tokens),
+    latestCacheCreationInputTokens: numberOrZero(usage.cache_creation_input_tokens),
+    latestCacheReadInputTokens: numberOrZero(usage.cache_read_input_tokens),
+    latestOutputTokens: numberOrZero(usage.output_tokens),
+    contextWindow: resolveClaudeCodeEffectiveContextWindow(model),
   };
   return {
     ...contextSnapshot,
@@ -183,12 +203,18 @@ function normalizeClaudeContextPayload(message, raw) {
       runtimeId,
       threadId,
       observationId,
-      inputTokens,
-      cacheCreationInputTokens,
-      cacheReadInputTokens,
-      outputTokens,
+      inputTokens: numberOrZero(usage.input_tokens),
+      cacheCreationInputTokens: numberOrZero(usage.cache_creation_input_tokens),
+      cacheReadInputTokens: numberOrZero(usage.cache_read_input_tokens),
+      outputTokens: numberOrZero(usage.output_tokens),
     },
   };
+}
+
+function resolveClaudeCodeEffectiveContextWindow(model) {
+  const normalizedModel = normalizeString(model);
+  if (!normalizedModel) return 0;
+  return /\[1m\]$/iu.test(normalizedModel) ? 1_000_000 : 200_000;
 }
 
 function normalizeString(value) {

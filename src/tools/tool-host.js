@@ -6,6 +6,55 @@ const {
   STICKER_TAG_GUIDANCE,
 } = require("../services/sticker-service");
 
+const SPEECH_DELIVERY_PLAN_SCHEMA = {
+  type: "object",
+  description: "Optional structured expression, parameter offsets, pauses and provider-safe sound tags.",
+  required: ["schemaVersion", "version"],
+  properties: {
+    schemaVersion: { type: "integer", description: "Speech Delivery Plan schema version; use 1." },
+    version: { type: "string", description: "Stable plan version such as bedtime-soft-v1." },
+    emotion: { type: "string", description: "Expression hint such as gentle, warm, calm, happy, sad, angry, fearful, disgusted, or surprised." },
+    speedOffset: { type: "number", description: "Relative speed adjustment from -0.5 to 0.5." },
+    volumeOffset: { type: "number", description: "Relative volume adjustment from -2 to 2." },
+    pitchOffset: { type: "number", description: "Relative pitch adjustment from -6 to 6." },
+    pauses: {
+      type: "array",
+      description: "Optional pauses inserted at Unicode character positions in the spoken text.",
+      items: {
+        type: "object",
+        required: ["afterCharacter", "durationSeconds"],
+        properties: {
+          afterCharacter: { type: "integer", description: "Insert after this many Unicode characters." },
+          durationSeconds: { type: "number", description: "Pause duration from 0.01 to 10 seconds." },
+        },
+        additionalProperties: false,
+      },
+    },
+    soundTags: {
+      type: "array",
+      description: "Optional provider-safe vocal sound tags inserted at Unicode character positions.",
+      items: {
+        type: "object",
+        required: ["afterCharacter", "tag"],
+        properties: {
+          afterCharacter: { type: "integer", description: "Insert after this many Unicode characters." },
+          tag: {
+            type: "string",
+            description: "Supported vocal sound tag.",
+            enum: [
+              "laughs", "chuckle", "coughs", "clear-throat", "groans", "breath", "pant",
+              "inhale", "exhale", "gasps", "sniffs", "sighs", "snorts", "burps",
+              "lip-smacking", "humming", "hissing", "emm", "sneezes",
+            ],
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  additionalProperties: false,
+};
+
 class ProjectToolHost {
   constructor({ services, runtimeContextStore }) {
     this.services = services;
@@ -161,6 +210,28 @@ const PROJECT_TOOLS = [
         text: `File sent: ${result.filePath}`,
         data: result,
       };
+    },
+  },
+  {
+    name: "cyberboss_webchat_send_voice",
+    description: "Send one explicit Assistant Voice Message to the current WebChat thread. This is not available for WeChat.",
+    shortHint: "Send a generated voice message after deciding the spoken text.",
+    topics: ["channel", "voice"],
+    inputSchema: {
+      type: "object",
+      required: ["text"],
+      properties: {
+        text: { type: "string", description: "Exact spoken text; keep it concise and natural." },
+        messageId: { type: "string", description: "Optional stable message identity." },
+        itemId: { type: "string", description: "Optional stable Assistant item identity." },
+        turnId: { type: "string", description: "Optional Assistant turn identity." },
+        speechDeliveryPlan: SPEECH_DELIVERY_PLAN_SCHEMA,
+      },
+      additionalProperties: false,
+    },
+    async handler({ services, args, context }) {
+      const result = await services.channelVoice.sendToCurrentChat(args, context)
+      return result
     },
   },
   {

@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const fs = require("fs/promises");
 const path = require("path");
 const { parseQuotedEnvelope } = require("../../shared/quoted-envelope");
+const { normalizeVoiceMessage } = require("../../voice/contract");
 
 const MAX_EVENT_LOG_SIZE = 2_000;
 const MAX_UPLOAD_FILE_NAME_LENGTH = 120;
@@ -161,8 +162,11 @@ function createWebChatChannelAdapter({ config }) {
   function publishInbound({ prepared, threadId = "", turnId = "" } = {}) {
     if (!prepared) return null;
     const bubbleSegments = normalizeBubbleSegments(prepared.bubbleSegments);
-    const text = bubbleSegments.map((segment) => segment.text).filter(Boolean).join("\n\n")
-      || normalizeText(prepared.originalText || prepared.text);
+    const voiceMessage = prepared.voiceMessage ? normalizeVoiceMessage(prepared.voiceMessage) : null;
+    const text = voiceMessage
+      ? normalizeText(voiceMessage.transcript?.normalizedText || prepared.displayText)
+      : bubbleSegments.map((segment) => segment.text).filter(Boolean).join("\n\n")
+        || normalizeText(prepared.originalText || prepared.text);
     const quotedEnvelope = parseQuotedEnvelope(text);
     const quote = quotedEnvelope.quote || "";
     const visibleText = quotedEnvelope.text;
@@ -177,6 +181,7 @@ function createWebChatChannelAdapter({ config }) {
     const record = {
       id: `web-inbound-${normalizeText(prepared.messageId) || crypto.randomUUID()}`,
       messageId: normalizeText(prepared.messageId),
+      itemId: normalizeText(prepared.messageId),
       type: "user",
       role: "user",
       timestamp: prepared.receivedAt || new Date().toISOString(),
@@ -185,9 +190,11 @@ function createWebChatChannelAdapter({ config }) {
       text: visibleText,
       meta: {
         messageId: normalizeText(prepared.messageId),
+        itemId: normalizeText(prepared.messageId),
         ...(normalizeText(prepared.requestId) ? { requestId: normalizeText(prepared.requestId) } : {}),
         ...turnIdentity,
         ...(bubbleSegments.length ? { bubbleSegments } : {}),
+        ...(voiceMessage ? { voiceMessage } : {}),
         sourceKey: `web|message|${normalizeText(prepared.messageId)}`,
         ...(quote ? { quote } : {}),
         attachments: media.attachments,
@@ -202,6 +209,7 @@ function createWebChatChannelAdapter({ config }) {
       senderId: prepared.senderId,
       threadId: record.threadId,
       turnId: record.turnId,
+      itemId: record.itemId,
       ...turnIdentity,
       record,
     });
@@ -357,6 +365,66 @@ function createWebChatChannelAdapter({ config }) {
     return Promise.resolve();
   }
 
+  function publishAssistantVoice({
+    userId,
+    voiceMessage,
+    threadId = "",
+    turnId = "",
+    itemId = "",
+    messageId = "",
+    requestId = "",
+    logicalTurnId = "",
+    displayTurnId = "",
+    transportTurnId = "",
+    canonicalTurnId = "",
+  } = {}) {
+    const normalizedVoiceMessage = voiceMessage ? normalizeVoiceMessage(voiceMessage) : null
+    if (!normalizedVoiceMessage || normalizedVoiceMessage.origin !== "assistant") {
+      return Promise.reject(new Error("assistant voice message is required"))
+    }
+    const stableItemId = normalizeText(itemId) || normalizeText(messageId) || crypto.randomUUID()
+    const stableMessageId = normalizeText(messageId) || stableItemId
+    const turnIdentity = normalizeTurnIdentity({
+      requestId,
+      messageId: stableMessageId,
+      logicalTurnId,
+      displayTurnId,
+      transportTurnId: transportTurnId || turnId,
+      canonicalTurnId,
+    })
+    const record = {
+      id: ["web-assistant-", stableMessageId].join(""),
+      messageId: stableMessageId,
+      itemId: stableItemId,
+      type: "assistant",
+      role: "assistant",
+      timestamp: new Date().toISOString(),
+      threadId: normalizeText(threadId),
+      turnId: normalizeText(turnId),
+      text: normalizeText(normalizedVoiceMessage.transcript?.normalizedText),
+      meta: {
+        messageId: stableMessageId,
+        itemId: stableItemId,
+        ...turnIdentity,
+        voiceMessage: normalizedVoiceMessage,
+        sourceKey: ["web|assistant|", stableMessageId].join(""),
+        ephemeral: true,
+        source: "webchat",
+      },
+    }
+    publish({
+      kind: "message",
+      messageKind: "assistant",
+      senderId: userId,
+      threadId: record.threadId,
+      turnId: record.turnId,
+      itemId: stableItemId,
+      ...turnIdentity,
+      record,
+    })
+    return Promise.resolve(record)
+  }
+
   function sendTyping({ userId, status = 1, threadId = "", turnId = "" } = {}) {
     publish({
       kind: "typing",
@@ -501,6 +569,7 @@ function createWebChatChannelAdapter({ config }) {
       return nextCursor;
     },
     sendText,
+    publishAssistantVoice,
     sendTyping,
     sendFile,
     persistUpload,

@@ -172,6 +172,75 @@ test("internal WebChat tool delivery rejects files outside the state directory",
   assert.deepEqual(webAdapter.getRecentEvents(0), [])
 })
 
+test("explicit WebChat voice tool reaches the Assistant Voice endpoint", async (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-project-tool-voice-"))
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
+  const config = createConfig(stateDir)
+  const webAdapter = createWebChatChannelAdapter({ config })
+  const calls = []
+  const webServer = createWebChatServer({
+    config,
+    adapter: webAdapter,
+    chatService: {
+      getWebChatIdentity() {
+        return { senderId: "user-web" }
+      },
+      async handleWebChatAssistantVoice(command) {
+        calls.push(command)
+        return { accepted: true, status: "accepted", messageId: command.messageId }
+      },
+    },
+  })
+  await webServer.start()
+  t.after(() => webServer.close())
+  config.webChatPort = webServer.address().port
+
+  const { toolHost } = createXiaoyeProjectTooling(config)
+  const runtimeContextStore = new RuntimeContextStore({
+    filePath: config.projectToolContextFile,
+  })
+  runtimeContextStore.setActiveContext({
+    workspaceRoot: config.workspaceRoot,
+    runtimeId: "codex",
+    threadId: "thread-web",
+    senderId: "user-web",
+    provider: "web",
+  })
+
+  const result = await toolHost.invokeTool("cyberboss_webchat_send_voice", {
+    text: "这是一条测试语音。",
+    speechDeliveryPlan: {
+      schemaVersion: 1,
+      version: "bedtime-soft-v1",
+      emotion: "gentle",
+      speedOffset: -0.1,
+      volumeOffset: -0.15,
+      pitchOffset: -1,
+      pauses: [{ afterCharacter: 4, durationSeconds: 0.35 }],
+      soundTags: [{ afterCharacter: 4, tag: "breath" }],
+    },
+  }, {
+    workspaceRoot: config.workspaceRoot,
+    runtimeId: "codex",
+  })
+
+  assert.equal(result.data.messageId.length > 0, true)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].spokenText, "这是一条测试语音。")
+  assert.equal(calls[0].threadId, "thread-web")
+  assert.equal(calls[0].senderId, "user-web")
+  assert.deepEqual(calls[0].speechDeliveryPlan, {
+    schemaVersion: 1,
+    version: "bedtime-soft-v1",
+    emotion: "gentle",
+    speedOffset: -0.1,
+    volumeOffset: -0.15,
+    pitchOffset: -1,
+    pauses: [{ afterCharacter: 4, durationSeconds: 0.35 }],
+    soundTags: [{ afterCharacter: 4, tag: "breath" }],
+  })
+})
+
 function readFirstMessageEvent(url, token) {
   return readMessageEvents(url, token, 1).then((events) => events[0])
 }

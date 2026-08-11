@@ -25,6 +25,7 @@ class ClaudeCodeProcessClient {
     this.pendingTurnId = "";
     this.pendingTurnContext = null;
     this.pendingReplyItemId = "";
+    this.latestContextUsage = null;
     this.sessionId = "";
     this.resumeSessionId = "";
     this.activeThreadId = "";
@@ -159,6 +160,9 @@ class ClaudeCodeProcessClient {
   handleAssistant(raw) {
     const usage = raw?.message?.usage;
     if (usage && typeof usage === "object") {
+      if (hasPositiveClaudeUsage(usage)) {
+        this.latestContextUsage = usage;
+      }
       this.emit({
         type: "context.updated",
         usage,
@@ -254,8 +258,10 @@ class ClaudeCodeProcessClient {
     }
     if (raw?.usage && typeof raw.usage === "object") {
       this.emit({
-        type: "context.updated",
+        type: "usage.updated",
         usage: raw.usage,
+        contextUsage: this.latestContextUsage,
+        numTurns: Number(raw.num_turns) || 0,
         turnId: this.pendingTurnId,
         sessionId: this.activeThreadId || this.sessionId,
       }, raw);
@@ -272,6 +278,7 @@ class ClaudeCodeProcessClient {
     this.pendingTurnId = "";
     this.pendingTurnContext = null;
     this.pendingReplyItemId = "";
+    this.latestContextUsage = null;
     this.activeThreadId = "";
   }
 
@@ -326,6 +333,7 @@ class ClaudeCodeProcessClient {
     }
     this.pendingTurnId = `turn-${Date.now()}`;
     this.pendingReplyItemId = "";
+    this.latestContextUsage = null;
     const requestId = normalizeNonEmptyString(correlation?.requestId);
     const logicalTurnId = normalizeNonEmptyString(correlation?.logicalTurnId)
       || (requestId ? `web:${requestId}` : "");
@@ -428,6 +436,7 @@ class ClaudeCodeProcessClient {
     this.pendingTurnId = "";
     this.pendingTurnContext = null;
     this.pendingReplyItemId = "";
+    this.latestContextUsage = null;
     this.rejectSessionWaiters(new Error("claudecode process closed"));
   }
 
@@ -553,6 +562,15 @@ const SENSITIVE_PATTERNS = /\b(?:sk-[a-zA-Z0-9]{20,}|Bearer\s+[a-zA-Z0-9_\-]{20,
 
 function isPotentiallySensitive(text) {
   return SENSITIVE_KEYWORDS.test(text) || SENSITIVE_PATTERNS.test(text);
+}
+
+function hasPositiveClaudeUsage(usage) {
+  return [
+    usage?.input_tokens,
+    usage?.cache_creation_input_tokens,
+    usage?.cache_read_input_tokens,
+    usage?.output_tokens,
+  ].some((value) => Number.isFinite(Number(value)) && Number(value) > 0);
 }
 
 module.exports = { ClaudeCodeProcessClient, buildClaudeProcessArgs };

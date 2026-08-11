@@ -58,6 +58,59 @@ test("codex token events separate cumulative totals from the latest context snap
   });
 });
 
+test("codex v2 token usage notifications map into runtime usage", () => {
+  const event = mapCodexMessageToRuntimeEvent({
+    method: "thread/tokenUsage/updated",
+    params: {
+      threadId: "thread-v2",
+      turnId: "turn-v2",
+      tokenUsage: {
+        modelContextWindow: 400_000,
+        total: {
+          inputTokens: 12_000,
+          cachedInputTokens: 8_000,
+          outputTokens: 600,
+          reasoningOutputTokens: 250,
+          totalTokens: 12_600,
+        },
+        last: {
+          inputTokens: 2_000,
+          cachedInputTokens: 1_400,
+          outputTokens: 100,
+          reasoningOutputTokens: 40,
+          totalTokens: 2_100,
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(event.payload.contextSnapshot, {
+    runtimeId: "codex",
+    threadId: "thread-v2",
+    inputTokens: 2_000,
+    cachedInputTokens: 1_400,
+    outputTokens: 100,
+    reasoningTokens: 40,
+    currentTokens: 2_100,
+    contextWindow: 400_000,
+  });
+  assert.deepEqual(event.payload.usageObservation, {
+    kind: "cumulative",
+    runtimeId: "codex",
+    threadId: "thread-v2",
+    total: {
+      inputTokens: 12_000,
+      cacheReadInputTokens: 8_000,
+      outputTokens: 600,
+    },
+    last: {
+      inputTokens: 2_000,
+      cacheReadInputTokens: 1_400,
+      outputTokens: 100,
+    },
+  });
+});
+
 test("codex token events use the adapter thread when the runtime payload omits thread_id", () => {
   const event = mapCodexMessageToRuntimeEvent({
     type: "event_msg",

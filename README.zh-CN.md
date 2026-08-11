@@ -195,7 +195,7 @@ CYBERBOSS_LOCATION_BATTERY_HISTORY_LIMIT=100
 - `CYBERBOSS_CLAUDE_MODEL`
   设置 Claude 默认模型。
 - `CYBERBOSS_CLAUDE_CONTEXT_WINDOW`
-  设置 Claude 实际上下文窗口，`/status` 里的 `📦 context` 近似值会基于它计算。
+  仅为终端 `/status` 的 `📦 context` 提供人工近似值；它不会改变 ClaudeCode 的真实窗口，也不作为 MurmurLane 各模型最大窗口的来源。MurmurLane 使用 ClaudeCode 实际采用的普通 200k 或显式 `[1m]` 1M 窗口。
 - `CYBERBOSS_CLAUDE_PERMISSION_MODE`
   设置 Claude 权限模式。
 - `CYBERBOSS_CLAUDE_DISABLE_VERBOSE`

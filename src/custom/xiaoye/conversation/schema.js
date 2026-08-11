@@ -29,6 +29,8 @@ const ALLOWED_META_KEYS = new Set([
   "transportTurnId",
   "canonicalTurnId",
   "bubbleSegments",
+  "voiceMessage",
+  "speechRendition",
 ])
 
 const ALLOWED_SOURCE_KEYS = new Set([

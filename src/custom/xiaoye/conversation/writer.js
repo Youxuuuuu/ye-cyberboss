@@ -30,6 +30,31 @@ class ConversationWriter {
     return this.withArchiveLock(() => this.writeRecordsUnlocked(records))
   }
 
+  findRecordByMessageId({ messageId = "" } = {}) {
+    const target = normalizeText(messageId)
+    if (!target) return null
+    return this.findRecord((candidate) => normalizeText(candidate.messageId || candidate?.meta?.messageId) === target)
+  }
+
+  findRecordByItemId({ itemId = "" } = {}) {
+    const target = normalizeText(itemId)
+    if (!target) return null
+    return this.findRecord((candidate) => normalizeText(candidate.itemId || candidate?.meta?.itemId) === target)
+  }
+
+  findRecord(matches) {
+    if (typeof matches !== "function" || !fs.existsSync(this.conversationDir)) return null
+    const entries = fs.readdirSync(this.conversationDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && /^\d{4}-\d{2}-\d{2}\.jsonl$/u.test(entry.name))
+      .sort((left, right) => right.name.localeCompare(left.name))
+    for (const entry of entries) {
+      const records = this.readExistingDayRecords(path.join(this.conversationDir, entry.name), [])
+      const record = records.find(matches)
+      if (record) return record
+    }
+    return null
+  }
+
   writeRecordsUnlocked(records = []) {
     this.ensureDeletionState()
     const normalizedRecords = []

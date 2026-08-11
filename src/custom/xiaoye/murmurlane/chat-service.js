@@ -2,12 +2,21 @@ const crypto = require("crypto")
 const path = require("path")
 
 const { normalizeWebChatSendContract } = require("./webchat/contract")
+const { createUserVoiceInput } = require("../voice")
+const { createVoiceAssetStore } = require("../voice/asset-store")
+const { probeAudioFile } = require("../voice/audio-probe")
+const { createVoiceGenerationStore } = require("../voice/generation-store")
+const { createConfiguredVoiceProfile, createVoiceProfileStore } = require("../voice/profile-store")
+const { createConfiguredSynthesisProvider, resolveSynthesisProviderId } = require("../voice/synthesis-provider")
+const { createAssistantVoiceSynthesis } = require("../voice/synthesis-service")
 
 function createMurmurLaneChatService({
   config,
   adapter,
   cyberbossPort,
   conversationCommands = null,
+  voiceDependencies = null,
+  env = process.env,
 } = {}) {
   if (!cyberbossPort || typeof cyberbossPort !== "object") {
     throw new Error("murmurlane chat service requires cyberbossPort")
@@ -24,6 +33,49 @@ function createMurmurLaneChatService({
   const buildInboundDraft = requirePortFunction(cyberbossPort, "buildInboundDraft")
   const buildMergedInboundPrepared = requirePortFunction(cyberbossPort, "buildMergedInboundPrepared")
   const normalizeWorkspaceRoot = requirePortFunction(cyberbossPort, "normalizeWorkspaceRoot")
+  const userVoiceInput = createUserVoiceInput({
+    config,
+    env,
+    dependencies: voiceDependencies || {},
+    stateSink: persistVoiceState,
+    submitRuntime: submitVoiceRuntime,
+  })
+  const assistantVoiceEnabled = resolveEnabled(
+    config.assistantVoiceMessageEnabled,
+    env.CYBERBOSS_ASSISTANT_VOICE_MESSAGE_ENABLED,
+  )
+  const speechRenditionEnabled = resolveEnabled(
+    config.speechRenditionEnabled,
+    env.CYBERBOSS_SPEECH_RENDITION_ENABLED,
+    assistantVoiceEnabled,
+  )
+  const assistantProviderId = resolveSynthesisProviderId(config, env)
+  const assistantProvider = voiceDependencies?.assistantProvider || createConfiguredSynthesisProvider({
+    providerId: assistantProviderId,
+    env,
+    fetchImpl: voiceDependencies?.fetchImpl || globalThis.fetch,
+    timeoutMs: numberSetting(config.assistantVoiceProviderTimeoutMs, env.CYBERBOSS_ASSISTANT_VOICE_PROVIDER_TIMEOUT_MS, 120_000),
+  })
+  const assistantVoiceSynthesis = assistantVoiceEnabled || speechRenditionEnabled
+    ? (voiceDependencies?.assistantVoiceSynthesis || createAssistantVoiceSynthesis({
+        provider: assistantProvider,
+        profileStore: voiceDependencies?.assistantProfileStore || createVoiceProfileStore({
+          stateDir: config.stateDir,
+          initialProfile: createConfiguredVoiceProfile({ env, providerId: assistantProviderId }),
+          preferConfiguredProvider: true,
+        }),
+        generationStore: voiceDependencies?.assistantGenerationStore || createVoiceGenerationStore({ stateDir: config.stateDir }),
+        assetStore: voiceDependencies?.assistantAssetStore || createVoiceAssetStore({
+          stateDir: config.stateDir,
+          maxBytes: numberSetting(config.assistantVoiceMaxBytes, env.CYBERBOSS_ASSISTANT_VOICE_MAX_BYTES, config.webChatMaxUploadBytes || 25 * 1024 * 1024),
+          probeAudio: voiceDependencies?.probeAudio || ((input) => probeAudioFile({
+            ...input,
+            timeoutMs: numberSetting(config.assistantVoiceProbeTimeoutMs, env.CYBERBOSS_ASSISTANT_VOICE_PROBE_TIMEOUT_MS, 5_000),
+          })),
+        }),
+        stateSink: persistAssistantVoiceState,
+      }))
+    : null
 
   function getRuntimeAdapter() {
     return requirePortObjectResult(getRuntimeAdapterFromPort(), "getRuntimeAdapter")
@@ -107,6 +159,15 @@ function createMurmurLaneChatService({
         senderId: context.senderId,
         threadId: selectedThreadId,
       }),
+      voiceInput: userVoiceInput.getStatus(),
+      assistantVoice: {
+        enabled: assistantVoiceEnabled,
+        ...(assistantProvider.getStatus?.() || { provider: assistantProvider.id || "minimax", configured: false, available: false }),
+      },
+      speechRendition: {
+        enabled: speechRenditionEnabled,
+        ...(assistantProvider.getStatus?.() || { provider: assistantProvider.id || "minimax", configured: false, available: false }),
+      },
     }
   }
 
@@ -389,6 +450,330 @@ function createMurmurLaneChatService({
     }
   }
 
+  async function handleWebChatVoiceMessage({
+    bytes,
+    contentType = "",
+    senderId = "",
+    clientId = "",
+    threadId = "",
+    newThread = false,
+    requestId = "",
+    messageId = "",
+    receivedAt = "",
+    signal = null,
+  } = {}) {
+    if (!userVoiceInput.enabled) {
+      return userVoiceInput.submitUserVoice({})
+    }
+    const context = resolveWebChatContext(senderId)
+    const runtimeAdapter = getRuntimeAdapter()
+    const sessionStore = runtimeAdapter.getSessionStore()
+    const normalizedClientId = normalizeCommandArgument(clientId) || crypto.randomUUID()
+    const requestedThreadId = normalizeThreadId(threadId)
+    let workspaceRoot = context.workspaceRoot
+
+    const runtimeMismatch = requestedThreadId
+      ? getThreadRuntimeMismatch({ sessionStore, runtimeAdapter, threadId: requestedThreadId })
+      : null
+    if (runtimeMismatch) {
+      const error = new Error(runtimeMismatch.message)
+      error.code = runtimeMismatch.code
+      error.statusCode = 409
+      throw error
+    }
+    if (newThread) {
+      await runtimeAdapter.startFreshThreadDraft({ workspaceRoot })
+      sessionStore.clearThreadIdForWorkspace(context.bindingKey, workspaceRoot)
+    } else if (requestedThreadId) {
+      const currentThreadId = sessionStore.getThreadIdForWorkspace(context.bindingKey, workspaceRoot)
+      if (currentThreadId !== requestedThreadId) {
+        await selectWebChatThread({ senderId: context.senderId, threadId: requestedThreadId, clientId: normalizedClientId })
+        workspaceRoot = resolveWorkspaceRoot(context.bindingKey)
+      }
+    }
+    const currentThreadId = sessionStore.getThreadIdForWorkspace(context.bindingKey, workspaceRoot) || ""
+    return userVoiceInput.submitUserVoice({
+      bytes,
+      contentType,
+      requestId,
+      messageId,
+      threadId: requestedThreadId || currentThreadId,
+      senderId: context.senderId,
+      clientId: normalizedClientId,
+      receivedAt,
+      signal,
+    })
+  }
+
+  async function handleWebChatVoiceRetry({ senderId = "", clientId = "", messageId = "", signal = null } = {}) {
+    const command = resolvePersistedVoiceCommand({ senderId, clientId, messageId, signal })
+    return userVoiceInput.retryUserVoice(command)
+  }
+
+  async function handleWebChatVoiceTranscriptConfirm({
+    senderId = "",
+    clientId = "",
+    messageId = "",
+    normalizedText = "",
+    signal = null,
+  } = {}) {
+    const command = resolvePersistedVoiceCommand({ senderId, clientId, messageId, signal })
+    return userVoiceInput.confirmTranscript({ ...command, normalizedText })
+  }
+
+  async function handleWebChatAssistantVoice({
+    senderId = "",
+    threadId = "",
+    messageId = "",
+    itemId = "",
+    turnId = "",
+    spokenText = "",
+    speechDeliveryPlan = null,
+    signal = null,
+  } = {}) {
+    ensureAssistantVoiceEnabled()
+    const context = resolveWebChatContext(senderId)
+    const currentThreadId = resolveCurrentThreadId(context)
+    const result = await assistantVoiceSynthesis.synthesizeAssistantVoice({
+      threadId: normalizeThreadId(threadId) || currentThreadId,
+      messageId: normalizeCommandArgument(messageId) || crypto.randomUUID(),
+      itemId: normalizeCommandArgument(itemId),
+      turnId: normalizeCommandArgument(turnId),
+      spokenText,
+      speechDeliveryPlan,
+      signal,
+    })
+    const delivered = result.kind === "delivered"
+    return { accepted: delivered, status: delivered ? "accepted" : "failed", ...result }
+  }
+
+  async function handleWebChatAssistantVoiceRetry({ senderId = "", messageId = "", signal = null, useCurrentProfile = false } = {}) {
+    ensureAssistantVoiceEnabled()
+    const record = conversationCommands?.getAssistantVoiceMessage?.({ messageId: normalizeCommandArgument(messageId) })
+    if (!record?.meta?.voiceMessage) {
+      const error = new Error("assistant voice message was not found")
+      error.statusCode = 404
+      throw error
+    }
+    const result = await assistantVoiceSynthesis.retryAssistantVoice({
+      voiceMessage: record.meta.voiceMessage,
+      signal,
+      useCurrentProfile,
+    })
+    const delivered = result.kind === "delivered"
+    return { accepted: delivered, status: delivered ? "accepted" : "failed", ...result }
+  }
+
+  async function handleWebChatSpeechRendition({ senderId = "", messageId = "", signal = null, speechDeliveryPlan = null } = {}) {
+    ensureSpeechRenditionEnabled()
+    const requestedRecordId = normalizeCommandArgument(messageId)
+    const record = conversationCommands?.getAssistantMessage?.({ messageId: requestedRecordId })
+    if (!record || record.type !== "assistant" || !normalizeText(record.text)) {
+      const error = new Error("assistant text message was not found")
+      error.statusCode = 404
+      throw error
+    }
+    const context = resolveWebChatContext(senderId)
+    const threadId = normalizeThreadId(record.threadId) || resolveCurrentThreadId(context)
+    if (!threadId) {
+      const error = new Error("assistant text message has no active thread")
+      error.statusCode = 409
+      throw error
+    }
+    const rendition = await assistantVoiceSynthesis.synthesizeSpeechRendition({
+      threadId,
+      sourceText: record.text,
+      existingRendition: record.meta?.speechRendition || null,
+      speechDeliveryPlan,
+      signal,
+    })
+    const persistedRecordId = normalizeCommandArgument(record.messageId || record.meta?.messageId)
+      || requestedRecordId
+      || normalizeCommandArgument(record.itemId || record.meta?.itemId)
+    const persisted = conversationCommands?.recordAssistantSpeechRendition?.({
+      messageId: persistedRecordId,
+      speechRendition: rendition,
+    })
+    const nextRecord = persisted?.record || {
+      ...record,
+      threadId,
+      meta: { ...record.meta, speechRendition: rendition },
+    }
+    adapter.publish({
+      kind: "message",
+      messageKind: "assistant",
+      senderId: context.senderId,
+      threadId: normalizeThreadId(nextRecord.threadId) || threadId,
+      turnId: nextRecord.turnId,
+      itemId: nextRecord.itemId,
+      record: nextRecord,
+    })
+    const accepted = rendition.status !== "failed"
+    return { accepted, status: accepted ? "accepted" : "failed", rendition }
+  }
+
+  function resolvePersistedVoiceCommand({ senderId, clientId, messageId, signal }) {
+    const context = resolveWebChatContext(senderId)
+    if (typeof conversationCommands?.getWebVoiceMessage !== "function") {
+      throw new Error("conversationCommands.getWebVoiceMessage is required for voice recovery")
+    }
+    const record = conversationCommands.getWebVoiceMessage({ messageId: normalizeCommandArgument(messageId) })
+    if (!record || record.type !== "user" || !record.meta?.voiceMessage) {
+      const error = new Error("voice message was not found")
+      error.statusCode = 404
+      throw error
+    }
+    const attachment = [...(record.meta.attachments || []), ...(record.meta.files || [])]
+      .find((item) => item?.kind === "voice" || String(item?.contentType || "").startsWith("audio/"))
+    if (!attachment) {
+      const error = new Error("voice message asset is unavailable")
+      error.statusCode = 409
+      throw error
+    }
+    return {
+      requestId: normalizeCommandArgument(record.meta.requestId) || `voice:${record.messageId}`,
+      messageId: normalizeCommandArgument(record.messageId || record.meta.messageId),
+      threadId: normalizeCommandArgument(record.threadId),
+      senderId: context.senderId,
+      clientId: normalizeCommandArgument(clientId) || crypto.randomUUID(),
+      receivedAt: normalizeCommandArgument(record.timestamp) || new Date().toISOString(),
+      voiceMessage: record.meta.voiceMessage,
+      attachment,
+      signal,
+    }
+  }
+
+  async function persistVoiceState(snapshot) {
+    if (typeof conversationCommands?.upsertVoiceMessage !== "function") {
+      throw new Error("conversationCommands.upsertVoiceMessage is required for voice input")
+    }
+    const context = resolveWebChatContext(snapshot.senderId)
+    const prepared = buildVoicePrepared(snapshot, context)
+    return conversationCommands.upsertVoiceMessage({
+      prepared,
+      context: {
+        runtimeId: normalizeCommandArgument(getRuntimeAdapter().describe?.().id),
+        threadId: snapshot.threadId,
+        turnId: snapshot.turnId,
+        workspaceRoot: context.workspaceRoot,
+      },
+    })
+  }
+
+  async function persistAssistantVoiceState(snapshot) {
+    if (snapshot.kind !== "assistant-voice-message") return null
+    if (typeof conversationCommands?.recordAssistantVoiceMessage !== "function") {
+      throw new Error("conversationCommands.recordAssistantVoiceMessage is required for assistant voice")
+    }
+    const context = resolveWebChatContext(snapshot.senderId)
+    const messageId = normalizeCommandArgument(snapshot.messageId) || crypto.randomUUID()
+    const result = conversationCommands.recordAssistantVoiceMessage({
+      voiceMessage: snapshot.voiceMessage,
+      messageId,
+      itemId: normalizeCommandArgument(snapshot.itemId) || messageId,
+      threadId: normalizeThreadId(snapshot.threadId),
+      turnId: normalizeCommandArgument(snapshot.turnId),
+      runtimeId: normalizeCommandArgument(getRuntimeAdapter().describe?.().id),
+      workspaceRoot: context.workspaceRoot,
+    })
+    adapter.publishAssistantVoice({
+      userId: context.senderId,
+      voiceMessage: snapshot.voiceMessage,
+      threadId: normalizeThreadId(snapshot.threadId),
+      turnId: normalizeCommandArgument(snapshot.turnId),
+      itemId: normalizeCommandArgument(snapshot.itemId) || messageId,
+      messageId,
+    })
+    return result
+  }
+
+  function ensureAssistantVoiceEnabled() {
+    if (assistantVoiceEnabled && assistantVoiceSynthesis) return
+    const error = new Error("assistant voice message is disabled")
+    error.code = "ASSISTANT_VOICE_DISABLED"
+    error.statusCode = 404
+    throw error
+  }
+
+  function ensureSpeechRenditionEnabled() {
+    if (speechRenditionEnabled && assistantVoiceSynthesis) return
+    const error = new Error("speech rendition is disabled")
+    error.code = "SPEECH_RENDITION_DISABLED"
+    error.statusCode = 404
+    throw error
+  }
+
+  function resolveCurrentThreadId(context) {
+    const runtimeAdapter = getRuntimeAdapter()
+    const sessionStore = runtimeAdapter.getSessionStore()
+    return sessionStore.getThreadIdForWorkspace(context.bindingKey, resolveWorkspaceRoot(context.bindingKey)) || ""
+  }
+
+  async function submitVoiceRuntime(input) {
+    const context = resolveWebChatContext(input.senderId)
+    const runtimeAdapter = getRuntimeAdapter()
+    const sessionStore = runtimeAdapter.getSessionStore()
+    const workspaceRoot = resolveWorkspaceRoot(context.bindingKey)
+    const attachment = normalizeWebAttachment(input.attachment, config.stateDir, isPathWithinRoot)
+    const draft = buildInboundDraft({
+      provider: "web",
+      workspaceId: context.workspaceId,
+      accountId: context.accountId,
+      senderId: context.senderId,
+      clientId: input.clientId,
+      messageId: input.messageId,
+      requestId: input.requestId,
+      logicalTurnId: input.logicalTurnId,
+      contextToken: `web:${input.clientId}`,
+      text: input.runtimeText,
+      displayText: input.displayText,
+      voiceMessage: input.voiceMessage,
+      receivedAt: input.receivedAt,
+    }, { attachments: [attachment] })
+    const currentThreadId = sessionStore.getThreadIdForWorkspace(context.bindingKey, workspaceRoot) || ""
+    adapter.setActiveTarget({
+      userId: context.senderId,
+      contextToken: `web:${input.clientId}`,
+      clientId: input.clientId,
+      threadId: currentThreadId || input.threadId,
+    })
+    const prepared = buildMergedInboundPrepared({
+      bindingKey: context.bindingKey,
+      workspaceRoot,
+      messages: [draft],
+      requestId: input.requestId,
+      messageId: input.messageId,
+      logicalTurnId: input.logicalTurnId,
+    })
+    prepared.voiceMessage = input.voiceMessage
+    prepared.displayText = input.displayText
+    prepared.bubbleSegments = []
+    return routePreparedInbound({ bindingKey: context.bindingKey, workspaceRoot, prepared })
+  }
+
+  function buildVoicePrepared(snapshot, context) {
+    const attachment = snapshot.attachment
+      ? normalizeWebAttachment(snapshot.attachment, config.stateDir, isPathWithinRoot)
+      : null
+    return {
+      provider: "web",
+      workspaceId: context.workspaceId,
+      accountId: context.accountId,
+      senderId: context.senderId,
+      clientId: snapshot.clientId,
+      messageId: snapshot.messageId,
+      requestId: snapshot.requestId,
+      logicalTurnId: snapshot.logicalTurnId,
+      contextToken: `web:${snapshot.clientId}`,
+      originalText: snapshot.displayText,
+      text: snapshot.displayText,
+      displayText: snapshot.displayText,
+      attachments: attachment ? [attachment] : [],
+      voiceMessage: snapshot.voiceMessage,
+      receivedAt: snapshot.receivedAt,
+    }
+  }
+
   return {
     getWebChatIdentity,
     resolveWebChatContext,
@@ -399,6 +784,12 @@ function createMurmurLaneChatService({
     selectWebChatThread,
     deleteWebChatThread,
     handleWebChatMessages,
+    handleWebChatVoiceMessage,
+    handleWebChatVoiceRetry,
+    handleWebChatVoiceTranscriptConfirm,
+    handleWebChatAssistantVoice,
+    handleWebChatAssistantVoiceRetry,
+    handleWebChatSpeechRendition,
   }
 }
 
@@ -604,6 +995,21 @@ function normalizeIsoTime(value) {
   }
   const parsed = new Date(normalized)
   return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString()
+}
+
+function resolveEnabled(configValue, envValue, fallback = false) {
+  if (typeof configValue === "boolean") return configValue
+  const normalized = String(envValue || "").trim().toLowerCase()
+  if (!normalized) return fallback
+  return ["1", "true", "yes", "on"].includes(normalized)
+}
+
+function numberSetting(configValue, envValue, fallback) {
+  for (const value of [configValue, envValue]) {
+    const number = Number(value)
+    if (Number.isFinite(number) && number > 0) return Math.floor(number)
+  }
+  return fallback
 }
 
 module.exports = { createMurmurLaneChatService }

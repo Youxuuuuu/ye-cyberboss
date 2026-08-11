@@ -22,6 +22,12 @@ function mapCodexMessageToRuntimeEvent(message, { threadId: fallbackThreadId = "
   }
   const method = normalizeString(message?.method);
   const params = message?.params || {};
+  if (method === "thread/tokenUsage/updated") {
+    return {
+      type: "runtime.context.updated",
+      payload: normalizeV2ContextPayload(params, { fallbackThreadId }),
+    };
+  }
   const threadId = extractThreadIdFromParams(params);
   const turnId = extractTurnIdFromParams(params);
 
@@ -151,6 +157,43 @@ function normalizeContextPayload(message, { fallbackThreadId = "" } = {}) {
             outputTokens: numberOrZero(last.output_tokens),
           }
         : null,
+    },
+  };
+}
+
+function normalizeV2ContextPayload(params, { fallbackThreadId = "" } = {}) {
+  const usage = params?.tokenUsage || {};
+  const total = usage?.total || {};
+  const last = usage?.last || {};
+  const runtimeId = "codex";
+  const threadId = normalizeString(params?.threadId || fallbackThreadId);
+  const contextSnapshot = {
+    runtimeId,
+    threadId,
+    inputTokens: numberOrZero(last.inputTokens),
+    cachedInputTokens: numberOrZero(last.cachedInputTokens),
+    outputTokens: numberOrZero(last.outputTokens),
+    reasoningTokens: numberOrZero(last.reasoningOutputTokens),
+    currentTokens: numberOrZero(last.totalTokens),
+    contextWindow: numberOrZero(usage?.modelContextWindow),
+  };
+  return {
+    ...contextSnapshot,
+    contextSnapshot,
+    usageObservation: {
+      kind: "cumulative",
+      runtimeId,
+      threadId,
+      total: {
+        inputTokens: numberOrZero(total.inputTokens),
+        cacheReadInputTokens: numberOrZero(total.cachedInputTokens),
+        outputTokens: numberOrZero(total.outputTokens),
+      },
+      last: {
+        inputTokens: numberOrZero(last.inputTokens),
+        cacheReadInputTokens: numberOrZero(last.cachedInputTokens),
+        outputTokens: numberOrZero(last.outputTokens),
+      },
     },
   };
 }

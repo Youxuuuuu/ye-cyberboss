@@ -6,6 +6,8 @@ function createMurmurLaneModule({
   config,
   cyberbossPort,
   conversationCommands = null,
+  voiceDependencies = null,
+  env = process.env,
 } = {}) {
   const adapter = createWebChatChannelAdapter({ config })
   const chatService = createMurmurLaneChatService({
@@ -13,6 +15,20 @@ function createMurmurLaneModule({
     adapter,
     cyberbossPort,
     conversationCommands,
+    voiceDependencies,
+    env,
+  })
+  // The project-tool channel router can call this seam when the runtime
+  // explicitly invokes cyberboss_webchat_send_voice. It remains a WebChat-only
+  // adapter capability and does not alter Cyberboss Core channel behavior.
+  adapter.sendVoice = (payload = {}) => chatService.handleWebChatAssistantVoice({
+    senderId: payload.userId,
+    threadId: payload.threadId,
+    messageId: payload.messageId,
+    itemId: payload.itemId,
+    turnId: payload.turnId,
+    spokenText: payload.spokenText,
+    speechDeliveryPlan: payload.speechDeliveryPlan,
   })
   const server = createWebChatServer({
     config,

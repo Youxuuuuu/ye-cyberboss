@@ -9,6 +9,8 @@ const { ConversationSourceLineResolver } = require("./source-line-resolver")
 const { createClaudeCodeImportParser } = require("./providers/claudecode-import")
 const { createCodexImportParser } = require("./providers/codex-import")
 const { parseQuotedEnvelope } = require("../shared/quoted-envelope")
+const { normalizeVoiceMessage } = require("../voice/contract")
+const { normalizeSpeechRendition } = require("../voice/speech-rendition-contract")
 
 class ConversationArchive {
   constructor({ config, writer = null, logger = console } = {}) {
@@ -125,6 +127,103 @@ class ConversationArchive {
     return this.writer.deleteThreadRecords({ threadId })
   }
 
+  getWebVoiceMessage({ messageId = "" } = {}) {
+    const normalizedMessageId = normalizeText(messageId)
+    if (!normalizedMessageId) return null
+    const remembered = this.webTurnByMessageId.get(normalizedMessageId)
+    const record = remembered?.prepared
+      ? this.buildMergedWebInboundRecord(remembered.prepared, {
+          runtimeId: remembered.runtimeId,
+          threadId: remembered.threadId,
+          turnId: remembered.canonicalTurnId,
+          workspaceRoot: remembered.workspaceRoot,
+        }, remembered)
+      : this.writer.findRecordByMessageId({ messageId: normalizedMessageId })
+    return record?.meta?.voiceMessage ? record : null
+  }
+
+  getAssistantVoiceMessage({ messageId = "" } = {}) {
+    const normalizedMessageId = normalizeText(messageId)
+    if (!normalizedMessageId) return null
+    const record = this.writer.findRecordByMessageId({ messageId: normalizedMessageId })
+    return record?.type === "assistant" && record?.meta?.voiceMessage?.origin === "assistant" ? record : null
+  }
+
+  getAssistantMessage({ messageId = "" } = {}) {
+    return this.findAssistantMessageByStableId(messageId)
+  }
+
+  recordAssistantVoiceMessage({
+    voiceMessage,
+    messageId = "",
+    itemId = "",
+    threadId = "",
+    turnId = "",
+    runtimeId = "",
+    workspaceRoot = "",
+    timestamp = new Date().toISOString(),
+  } = {}) {
+    const normalizedVoiceMessage = normalizeVoiceMessage(voiceMessage)
+    if (normalizedVoiceMessage.origin !== "assistant") {
+      throw new Error("assistant voice record requires origin assistant")
+    }
+    const stableMessageId = normalizeText(messageId || itemId)
+    if (!stableMessageId) throw new Error("assistant voice record requires messageId")
+    const stableItemId = normalizeText(itemId || stableMessageId)
+    const sourceKey = `web|assistant|${stableMessageId}`
+    return this.writer.writeRecords([normalizeConversationRecord({
+      id: `web-assistant-${stableMessageId}`,
+      messageId: stableMessageId,
+      itemId: stableItemId,
+      type: "assistant",
+      timestamp,
+      runtimeId,
+      threadId,
+      turnId,
+      workspaceRoot,
+      text: normalizedVoiceMessage.transcript?.normalizedText || "",
+      meta: {
+        messageId: stableMessageId,
+        itemId: stableItemId,
+        voiceMessage: normalizedVoiceMessage,
+        sourceKey,
+        ephemeral: true,
+        source: "webchat",
+      },
+      source: {
+        provider: "web",
+        sourceType: "web.message.assistant.voice",
+        rawId: stableMessageId,
+        sourceKey,
+      },
+    })])
+  }
+
+  recordAssistantSpeechRendition({ messageId = "", speechRendition } = {}) {
+    const normalizedMessageId = normalizeText(messageId)
+    if (!normalizedMessageId) throw new Error("speech rendition record requires messageId")
+    const normalizedRendition = normalizeSpeechRendition(speechRendition)
+    const existing = this.findAssistantMessageByStableId(normalizedMessageId)
+    if (!existing) {
+      throw new Error("assistant message for speech rendition was not found")
+    }
+    return this.writer.writeRecords([{
+      ...existing,
+      meta: {
+        ...existing.meta,
+        speechRendition: normalizedRendition,
+      },
+    }])
+  }
+
+  findAssistantMessageByStableId(value = "") {
+    const stableId = normalizeText(value)
+    if (!stableId) return null
+    const record = this.writer.findRecordByMessageId({ messageId: stableId })
+      || this.writer.findRecordByItemId({ itemId: stableId })
+    return record?.type === "assistant" ? record : null
+  }
+
   resetParserStateForSource(sourceFile) {
     const normalizedSourceFile = normalizeSourceFile(sourceFile)
     this.hydratedRealtimeSources.delete(normalizedSourceFile)
@@ -201,10 +300,13 @@ class ConversationArchive {
     const resolvedCorrelation = correlation || this.webTurnByMessageId.get(messageId) || null
     const bubbleSegments = normalizeWebBubbleSegments(prepared.bubbleSegments)
     const quote = extractQuote(prepared.originalText || prepared.text || "")
-    const displayText = bubbleSegments
-      .map((segment) => normalizeText(segment.text))
-      .filter(Boolean)
-      .join("\n\n") || quote.text
+    const voiceMessage = prepared.voiceMessage ? normalizeVoiceMessage(prepared.voiceMessage) : null
+    const displayText = voiceMessage
+      ? normalizeText(voiceMessage.transcript?.normalizedText || prepared.displayText)
+      : bubbleSegments
+        .map((segment) => normalizeText(segment.text))
+        .filter(Boolean)
+        .join("\n\n") || quote.text
     const attachments = normalizeMediaList(prepared.attachments, {
       workspaceRoot: context.workspaceRoot,
       stateDir: this.config.stateDir,
@@ -212,6 +314,7 @@ class ConversationArchive {
     return normalizeConversationRecord({
       id: `web-user-${messageId}`,
       messageId,
+      itemId: messageId,
       type: "user",
       timestamp: prepared.receivedAt || new Date().toISOString(),
       runtimeId: normalizeText(context.runtimeId),
@@ -221,6 +324,7 @@ class ConversationArchive {
       text: displayText,
       meta: {
         messageId,
+        itemId: messageId,
         ...(requestId ? { requestId } : {}),
         ...(logicalTurnId ? { logicalTurnId, displayTurnId: logicalTurnId } : {}),
         ...(normalizeText(resolvedCorrelation?.transportTurnId)
@@ -230,6 +334,7 @@ class ConversationArchive {
           ? { canonicalTurnId: normalizeText(resolvedCorrelation.canonicalTurnId) }
           : {}),
         ...(bubbleSegments.length ? { bubbleSegments } : {}),
+        ...(voiceMessage ? { voiceMessage } : {}),
         ...(quote.quote && bubbleSegments.length <= 1 ? { quote: quote.quote } : {}),
         attachments: attachments.filter((item) => item.kind !== "file"),
         files: attachments.filter((item) => item.kind === "file"),

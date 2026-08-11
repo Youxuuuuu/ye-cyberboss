@@ -264,6 +264,7 @@ test("runtime usage events keep context snapshots separate from thread totals", 
   assert.deepEqual(published.contextUsage, contextUsage);
   assert.deepEqual(published.usageTotals, usageTotals);
   assert.equal(Object.hasOwn(published, "usage"), false);
+
 });
 
 test("webchat publishes silent runtime exits as lifecycle events without visible error text", () => {

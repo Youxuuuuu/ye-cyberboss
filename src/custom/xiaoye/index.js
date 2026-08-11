@@ -5,14 +5,32 @@ const { createConversationArchive } = require("./conversation")
 const { createMurmurLaneModule } = require("./murmurlane")
 const { createWebChatDeliveryClient } = require("./murmurlane/webchat/delivery-client")
 
-function createXiaoyeModules({ config, cyberbossPort } = {}) {
+function createXiaoyeModules({ config, cyberbossPort, voiceDependencies = null, env = process.env } = {}) {
   const conversation = createConversationArchive({ config })
-  const murmurlane = createMurmurLaneModule({
+  let murmurlane = null
+  murmurlane = createMurmurLaneModule({
     config,
     cyberbossPort: createMurmurLanePort(cyberbossPort),
     conversationCommands: {
       deleteThreadRecords: (...args) => conversation.deleteThreadRecords(...args),
+      getWebVoiceMessage: (...args) => conversation.getWebVoiceMessage(...args),
+      getAssistantVoiceMessage: (...args) => conversation.getAssistantVoiceMessage(...args),
+      getAssistantMessage: (...args) => conversation.getAssistantMessage(...args),
+      recordAssistantVoiceMessage: (...args) => conversation.recordAssistantVoiceMessage(...args),
+      recordAssistantSpeechRendition: (...args) => conversation.recordAssistantSpeechRendition(...args),
+      upsertVoiceMessage({ prepared, context }) {
+        const result = conversation.recordMergedWebInbound(prepared, context)
+        logConversationWarnings(result?.warnings)
+        murmurlane.adapter.publishInbound({
+          prepared,
+          threadId: context.threadId || "",
+          turnId: context.turnId || "",
+        })
+        return result
+      },
     },
+    voiceDependencies,
+    env,
   })
 
   return {

@@ -50,6 +50,13 @@ function createChannelRouter({ weixin, web }) {
     sendFile(payload = {}) {
       return resolveAdapter(payload.provider).sendFile(payload);
     },
+    sendVoice(payload = {}) {
+      const adapter = resolveAdapter(payload.provider);
+      if (typeof adapter.sendVoice !== "function") {
+        return Promise.reject(new Error(`Channel provider ${payload.provider || "default"} does not support Assistant Voice Message.`));
+      }
+      return adapter.sendVoice(payload);
+    },
     setMinChunkChars(...args) {
       return weixin.setMinChunkChars(...args);
     },

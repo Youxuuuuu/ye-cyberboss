@@ -110,6 +110,25 @@ test("murmurlane chat service resolves identity and status through the narrow cy
     pendingApproval: null,
     webClients: 2,
     eventCursor: 73,
+    voiceInput: {
+      enabled: false,
+      provider: "siliconflow",
+      model: "Qwen/Qwen3-Omni-30B-A3B-Instruct",
+      configured: false,
+      available: false,
+    },
+    assistantVoice: {
+      enabled: false,
+      provider: "minimax",
+      configured: false,
+      available: false,
+    },
+    speechRendition: {
+      enabled: false,
+      provider: "minimax",
+      configured: false,
+      available: false,
+    },
   })
   assert.deepEqual(cursorCalls, [{
     senderId: "user-1",
@@ -128,6 +147,201 @@ test("murmurlane chat service rejects an incomplete runtime settings port at cre
     () => createMurmurLaneChatService({ config: {}, adapter: {}, cyberbossPort }),
     { message: "cyberbossPort.updateRuntimeSettings is required" },
   )
+})
+
+test("murmurlane chat service routes an enabled user voice through Xiaoye state and Runtime seams", async (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyberboss-chat-voice-"))
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }))
+  const voicePath = path.join(stateDir, "MLane", "voice", "self", "2026", "08", "voice.webm")
+  fs.mkdirSync(path.dirname(voicePath), { recursive: true })
+  fs.writeFileSync(voicePath, Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))
+  const stateCalls = []
+  const routeCalls = []
+  const sessionStore = {
+    buildBindingKey() { return "workspace-1:account-1:user-1" },
+    getThreadIdForWorkspace() { return "thread-voice" },
+    getRuntimeParamsForWorkspace() { return {} },
+  }
+  const service = createMurmurLaneChatService({
+    config: {
+      stateDir,
+      workspaceId: "workspace-1",
+      workspaceRoot: stateDir,
+      accountId: "account-1",
+      webChatSenderId: "user-1",
+      webChatEnabled: true,
+      userVoiceInputEnabled: true,
+    },
+    adapter: {
+      getClientCount() { return 0 },
+      getEventCursor() { return 0 },
+      setActiveTarget() {},
+    },
+    cyberbossPort: withRequiredCyberbossPort({
+      resolveWeixinAccount() { return null },
+      getActiveAccountId() { return "account-1" },
+      getRuntimeAdapter() {
+        return {
+          getSessionStore() { return sessionStore },
+          describe() { return { id: "codex" } },
+        }
+      },
+      getThreadStateStore() { return { getThreadState() { return null }, getLatestContext() { return null } } },
+      resolveWorkspaceRoot() { return stateDir },
+      async routePreparedInbound(payload) {
+        routeCalls.push(payload)
+        return { accepted: true, threadId: "thread-voice", turnId: "turn-voice" }
+      },
+      isPathWithinRoot,
+      buildInboundDraft,
+      buildMergedInboundPrepared,
+      normalizeWorkspaceRoot,
+    }),
+    conversationCommands: {
+      async upsertVoiceMessage(input) { stateCalls.push(input) },
+    },
+    voiceDependencies: {
+      assetStore: {
+        async persistUserVoice() {
+          return { assetId: "asset-voice", relativePath: "self/2026/08/voice.webm", mimeType: "audio/webm", sizeBytes: 4, durationMs: 1_000 }
+        },
+      },
+      provider: {
+        id: "siliconflow",
+        model: "qwen",
+        getStatus() { return { provider: "siliconflow", model: "qwen", configured: true, available: true } },
+        async understand() {
+          return {
+            provider: "siliconflow",
+            model: "qwen",
+            transcript: { originalText: "嗯", normalizedText: "嗯", confidence: { kind: "model-self-report", value: 0.95 } },
+            affect: null,
+            audioEvents: [],
+          }
+        },
+      },
+    },
+  })
+
+  const result = await service.handleWebChatVoiceMessage({
+    bytes: Buffer.from([0x1a, 0x45, 0xdf, 0xa3]),
+    contentType: "audio/webm",
+    requestId: "request-voice",
+    messageId: "message-voice",
+    threadId: "thread-voice",
+    clientId: "client-voice",
+  })
+
+  assert.equal(result.voiceMessage.processing.state, "delivered")
+  assert.deepEqual(stateCalls.map((call) => call.prepared.voiceMessage.processing.state), ["uploading", "transcribing", "analyzing-affect", "delivered"])
+  assert.equal(routeCalls.length, 1)
+  assert.equal(routeCalls[0].prepared.voiceMessage.transcript.normalizedText, "嗯")
+  assert.equal(routeCalls[0].prepared.displayText, "嗯")
+  assert.equal(routeCalls[0].prepared.bubbleSegments.length, 0)
+})
+
+test("Speech Rendition falls back to the current Thread for legacy assistant text records", async () => {
+  const synthesisCalls = []
+  const persistedCalls = []
+  const published = []
+  const record = {
+    type: "assistant",
+    messageId: "",
+    itemId: "item-native-assistant-1",
+    threadId: "",
+    turnId: "turn-legacy-1",
+    itemId: "item-legacy-1",
+    text: "这是一条旧的文字消息。",
+    meta: {},
+  }
+  const rendition = {
+    schemaVersion: 1,
+    status: "ready",
+    activeGenerationId: "generation-1",
+    asset: {
+      assetId: "asset-1",
+      relativePath: "threads/thread-current/2026/08/voice.mp3",
+      mimeType: "audio/mpeg",
+      sizeBytes: 128,
+      durationMs: 1_000,
+    },
+  }
+  const sessionStore = {
+    buildBindingKey() { return "workspace-1:account-1:user-1" },
+    getThreadIdForWorkspace() { return "thread-current" },
+    getRuntimeParamsForWorkspace() { return {} },
+  }
+  const service = createMurmurLaneChatService({
+    config: {
+      stateDir: os.tmpdir(),
+      workspaceId: "workspace-1",
+      workspaceRoot: "D:\\study\\cyberboss",
+      accountId: "account-1",
+      webChatSenderId: "user-1",
+      webChatEnabled: true,
+      assistantVoiceMessageEnabled: true,
+    },
+    adapter: {
+      getClientCount() { return 0 },
+      getEventCursor() { return 0 },
+      setActiveTarget() {},
+      publish(entry) { published.push(entry) },
+    },
+    cyberbossPort: withRequiredCyberbossPort({
+      resolveWeixinAccount() { return null },
+      getActiveAccountId() { return "account-1" },
+      getRuntimeAdapter() {
+        return {
+          getSessionStore() { return sessionStore },
+          describe() { return { id: "codex" } },
+        }
+      },
+      getThreadStateStore() {
+        return {
+          getThreadState() { return null },
+          getLatestContext() { return null },
+        }
+      },
+      resolveWorkspaceRoot() { return "D:/study/cyberboss" },
+      async routePreparedInbound() { return { accepted: true } },
+      isPathWithinRoot() { return true },
+      buildInboundDraft,
+      buildMergedInboundPrepared,
+      normalizeWorkspaceRoot,
+    }),
+    conversationCommands: {
+      getAssistantMessage({ messageId }) {
+        return messageId === record.itemId ? record : null
+      },
+      recordAssistantSpeechRendition(input) {
+        persistedCalls.push(input)
+        return {
+          record: {
+            ...record,
+            meta: { speechRendition: input.speechRendition },
+          },
+        }
+      },
+    },
+    voiceDependencies: {
+      assistantVoiceSynthesis: {
+        async synthesizeSpeechRendition(input) {
+          synthesisCalls.push(input)
+          return rendition
+        },
+      },
+    },
+  })
+
+  const result = await service.handleWebChatSpeechRendition({
+    senderId: "user-1",
+    messageId: record.itemId,
+  })
+
+  assert.equal(result.status, "accepted")
+  assert.equal(synthesisCalls[0].threadId, "thread-current")
+  assert.deepEqual(persistedCalls, [{ messageId: record.itemId, speechRendition: rendition }])
+  assert.equal(published[0].threadId, "thread-current")
 })
 
 test("murmurlane chat service delegates deletion of an idle thread to conversation commands", async () => {
